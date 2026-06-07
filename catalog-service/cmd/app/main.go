@@ -1,0 +1,92 @@
+package main
+
+import (
+	"catalog-service/internal/config"
+	router "catalog-service/internal/handler/http"
+	"catalog-service/internal/repository/postgres"
+	"catalog-service/internal/usecase"
+	"catalog-service/pkg/client/postgresql"
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+func main() {
+	os.Setenv("PG_URL", "postgres://clen_user:clenshop@localhost:5433/clen_catalog?sslmode=disable")
+
+	cfg := config.GetConfig()
+	setupLogger(cfg.IsDebug)
+
+	slog.Info("Starting Catalog Service",
+		slog.String("port", cfg.Listen.Port),
+		slog.String("env", "debug"),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pgPool, err := postgresql.NewClient(ctx, cfg.PostgreSQL.URL)
+	if err != nil {
+		slog.Error("Не удалось подключиться к БД", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	defer pgPool.Close()
+
+	//Repo
+	productRepo := postgres.NewProductRepo(pgPool)
+	slog.Info("Repository layer initialized successfully")
+	//UseCase
+	productUseCase := usecase.NewProduct(productRepo)
+	slog.Info("UseCase layer initialized successfully")
+	//Router
+	r := router.NewRouter(productUseCase)
+
+	srv := &http.Server{
+		Addr:         ":" + cfg.Listen.Port,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Server error", slog.String("error", err.Error()))
+		}
+	}()
+	slog.Info("HTTP server is running", slog.String("addr", srv.Addr))
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	sign := <-quit
+	slog.Info("Shutting down server gracefully", slog.String("signal", sign.String()))
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Server forced to shutdown", slog.String("error", err.Error()))
+	}
+
+	slog.Info("Server exited successfully")
+
+}
+
+func setupLogger(isDebug bool) {
+	var logHandler slog.Handler
+
+	if isDebug {
+		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+	} else {
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	}
+
+	logger := slog.New(logHandler)
+	slog.SetDefault(logger)
+}
