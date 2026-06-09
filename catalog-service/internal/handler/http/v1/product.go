@@ -29,10 +29,12 @@ func (h *ProductHandler) Register(r chi.Router) {
 }
 
 type CreateRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Price       int64  `json:"price"`
-	Stock       int    `json:"stock"`
+	CategoryID  string   `json:"category_id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Price       int64    `json:"price"`
+	Stock       int      `json:"stock"`
+	ImageURLs   []string `json:"image_urls"`
 }
 
 type ErrorResponse struct {
@@ -46,11 +48,19 @@ func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	categoryID, err := uuid.Parse(req.CategoryID)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid category_id format")
+		return
+	}
+
 	input := usecase.CreateProductInput{
+		CategoryID:  categoryID,
 		Name:        req.Name,
 		Description: req.Description,
 		Price:       req.Price,
 		Stock:       req.Stock,
+		ImageURLs:   req.ImageURLs,
 	}
 
 	id, err := h.useCase.Create(r.Context(), input)

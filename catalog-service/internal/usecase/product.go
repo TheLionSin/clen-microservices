@@ -17,10 +17,12 @@ var (
 )
 
 type CreateProductInput struct {
+	CategoryID  uuid.UUID
 	Name        string
 	Description string
 	Price       int64
 	Stock       int
+	ImageURLs   []string
 }
 
 type ProductUseCase interface {
@@ -50,14 +52,22 @@ func (u *productUseCase) Create(ctx context.Context, input CreateProductInput) (
 	if input.Stock < 0 {
 		return uuid.Nil, fmt.Errorf("%w: stock cannot be negative", ErrInvalidInput)
 	}
+	if input.CategoryID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%w: category_id is required", ErrInvalidInput)
+	}
+	if input.ImageURLs == nil {
+		input.ImageURLs = make([]string, 0)
+	}
 
 	now := time.Now().UTC()
 	newProduct := &domain.Product{
 		ID:          uuid.New(),
+		CategoryID:  input.CategoryID,
 		Name:        input.Name,
 		Description: input.Description,
 		Price:       input.Price,
 		Stock:       input.Stock,
+		ImageURLs:   input.ImageURLs,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}

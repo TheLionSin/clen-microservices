@@ -16,6 +16,14 @@ type Config struct {
 	PostgreSQL struct {
 		URL string `env:"PG_URL" env-required:"true"`
 	}
+
+	MinIO struct {
+		Endpoint        string `env:"MINIO_ENDPOINT" env-default:"localhost:9000"`
+		AccessKeyID     string `env:"MINIO_ACCESS_KEY" env-default:"clen_admin"`
+		SecretAccessKey string `env:"MINIO_SECRET_KEY" env-default:"clenshop"`
+		BucketName      string `env:"MINIO_BUCKET" env-default:"clen-images"`
+		UseSSL          bool   `env:"MINIO_USE_SSL" env-default:"false"`
+	}
 }
 
 var (
