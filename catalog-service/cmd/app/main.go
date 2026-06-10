@@ -5,6 +5,7 @@ import (
 	router "catalog-service/internal/handler/http"
 	"catalog-service/internal/repository/postgres"
 	"catalog-service/internal/usecase"
+	"catalog-service/pkg/client/minio"
 	"catalog-service/pkg/client/postgresql"
 	"context"
 	"errors"
@@ -38,14 +39,29 @@ func main() {
 
 	defer pgPool.Close()
 
+	minioClient, err := minio.NewClient(ctx, cfg.MinIO.Endpoint,
+		cfg.MinIO.AccessKeyID, cfg.MinIO.SecretAccessKey, cfg.MinIO.BucketName,
+		cfg.MinIO.UseSSL)
+
+	if err != nil {
+		slog.Error("Failed to connect to MinIO", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
 	//Repo
 	productRepo := postgres.NewProductRepo(pgPool)
+	categoryRepo := postgres.NewCategoryRepo(pgPool)
 	slog.Info("Repository layer initialized successfully")
 	//UseCase
+	//Product
 	productUseCase := usecase.NewProduct(productRepo)
+	//Category
+	categoryUseCase := usecase.NewCategoryUseCase(categoryRepo)
 	slog.Info("UseCase layer initialized successfully")
+	//MinIO
+	imageUseCase := usecase.NewImageUseCase(minioClient, cfg.MinIO.BucketName, cfg.MinIO.Endpoint)
 	//Router
-	r := router.NewRouter(productUseCase)
+	r := router.NewRouter(productUseCase, imageUseCase, categoryUseCase)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Listen.Port,

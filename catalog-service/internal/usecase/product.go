@@ -4,16 +4,11 @@ import (
 	"catalog-service/internal/domain"
 	"catalog-service/internal/repository"
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-)
-
-var (
-	ErrInvalidInput = errors.New("invalid input data")
 )
 
 type CreateProductInput struct {
