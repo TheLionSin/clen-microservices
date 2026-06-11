@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package catalog;
+
+option go_package = "catalog-service/pkg/api/catalog/v1;catalogv1";
+
+service CatalogService {
+  // Метод для проверки наличия и получения актуальной цены товара
+  rpc CheckProduct (CheckProductRequest) returns (CheckProductResponse);
+}
+
+// Входящие данные
+message CheckProductRequest {
+  string product_id = 1; // В protobuf нет UUID, используем строку
+}
+
+//Исходящие данные
+message CheckProductResponse {
+  bool exists = 1;
+  int64 price = 2; // Текущая цена (важно, чтобы юзер не заказал по старой цене)
+  int32 stock = 3; // Остаток на складе
+  string name = 4; // Название для отображения в корзине
+}

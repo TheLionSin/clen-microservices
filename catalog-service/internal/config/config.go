@@ -10,8 +10,9 @@ import (
 type Config struct {
 	IsDebug bool `env:"IS_DEBUG" env-default:"true"`
 	Listen  struct {
-		BindIP string `env:"BIND_IP" env-default:"0.0.0.0"`
-		Port   string `env:"PORT" env-default:"8081"`
+		BindIP   string `env:"BIND_IP" env-default:"0.0.0.0"`
+		HTTPPort string `env:"PORT" env-default:"8081"`
+		GRPCPort string `env:"GRPC_PORT" env-default:"50051"`
 	}
 	PostgreSQL struct {
 		URL string `env:"PG_URL" env-required:"true"`

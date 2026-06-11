@@ -24,11 +24,23 @@ func NewProductHandler(u usecase.ProductUseCase) *ProductHandler {
 
 func (h *ProductHandler) Register(r chi.Router) {
 	r.Post("/", h.Create)
+	r.Put("/{id}", h.Update)
+	r.Delete("/{id}", h.Delete)
 	r.Get("/{id}", h.GetByID)
 	r.Get("/", h.List)
 }
 
 type CreateRequest struct {
+	CategoryID  string   `json:"category_id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Price       int64    `json:"price"`
+	Stock       int      `json:"stock"`
+	ImageURLs   []string `json:"image_urls"`
+}
+
+type UpdateRequest struct {
+	ID          string   `json:"id"`
 	CategoryID  string   `json:"category_id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
@@ -74,6 +86,68 @@ func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id.String()})
+}
+
+func (h *ProductHandler) Update(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	productID, err := uuid.Parse(idStr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid uuid format")
+		return
+	}
+
+	var req UpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format")
+		return
+	}
+
+	categoryID, err := uuid.Parse(req.CategoryID)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid category_id format")
+		return
+	}
+
+	input := usecase.UpdateProductInput{
+		ID:          productID,
+		CategoryID:  categoryID,
+		Name:        req.Name,
+		Description: req.Description,
+		Price:       req.Price,
+		Stock:       req.Stock,
+		ImageURLs:   req.ImageURLs,
+	}
+
+	if err := h.useCase.Update(r.Context(), input); err != nil {
+		if errors.Is(err, domain.ErrProductNotFound) {
+			writeJSONError(w, http.StatusNotFound, "product not found")
+			return
+		}
+		if errors.Is(err, usecase.ErrInvalidInput) {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ProductHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	productID, err := uuid.Parse(idStr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid uuid format")
+		return
+	}
+	if err := h.useCase.Delete(r.Context(), productID); err != nil {
+		if errors.Is(err, domain.ErrProductNotFound) {
+			writeJSONError(w, http.StatusNotFound, "product not found")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *ProductHandler) GetByID(w http.ResponseWriter, r *http.Request) {

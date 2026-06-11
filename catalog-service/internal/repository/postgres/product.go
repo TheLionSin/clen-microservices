@@ -35,6 +35,34 @@ func (r *productRepo) Create(ctx context.Context, p *domain.Product) error {
 	return nil
 }
 
+func (r *productRepo) Update(ctx context.Context, p *domain.Product) error {
+	query := `UPDATE products SET category_id = $1, name = $2, description = $3,
+                    price = $4, stock = $5, image_urls = $6, updated_at = $7
+                    WHERE id = $8`
+
+	cmdTag, err := r.pool.Exec(ctx, query, p.CategoryID, p.Name, p.Description,
+		p.Price, p.Stock, p.ImageURLs, p.UpdatedAt, p.ID)
+	if err != nil {
+		return fmt.Errorf("postgres.productRepo.Update: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return domain.ErrProductNotFound
+	}
+	return nil
+}
+
+func (r *productRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	query := `DELETE from products WHERE id = $1`
+	cmdTag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("postgres.productRepo.Delete: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return domain.ErrProductNotFound
+	}
+	return nil
+}
+
 func (r *productRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Product, error) {
 	query := `SELECT id,category_id,name,description,price,stock,image_urls,created_at,updated_at FROM products WHERE id = $1`
 

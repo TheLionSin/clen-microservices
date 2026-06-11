@@ -20,8 +20,20 @@ type CreateProductInput struct {
 	ImageURLs   []string
 }
 
+type UpdateProductInput struct {
+	ID          uuid.UUID
+	CategoryID  uuid.UUID
+	Name        string
+	Description string
+	Price       int64
+	Stock       int
+	ImageURLs   []string
+}
+
 type ProductUseCase interface {
 	Create(ctx context.Context, input CreateProductInput) (uuid.UUID, error)
+	Update(ctx context.Context, input UpdateProductInput) error
+	Delete(ctx context.Context, id uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Product, error)
 	List(ctx context.Context, limit, offset int) ([]domain.Product, error)
 }
@@ -72,6 +84,41 @@ func (u *productUseCase) Create(ctx context.Context, input CreateProductInput) (
 	}
 
 	return newProduct.ID, nil
+}
+
+func (u *productUseCase) Update(ctx context.Context, input UpdateProductInput) error {
+	if input.Name == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	if input.Price <= 0 {
+		return fmt.Errorf("%w: price must be greater than zero", ErrInvalidInput)
+	}
+	if input.Stock < 0 {
+		return fmt.Errorf("%w: stock cannot be negative", ErrInvalidInput)
+	}
+
+	productToUpdate := &domain.Product{
+		ID:          input.ID,
+		CategoryID:  input.CategoryID,
+		Name:        input.Name,
+		Description: input.Description,
+		Price:       input.Price,
+		Stock:       input.Stock,
+		ImageURLs:   input.ImageURLs,
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	if err := u.repo.Update(ctx, productToUpdate); err != nil {
+		return fmt.Errorf("usecase.product.Update: %w", err)
+	}
+	return nil
+}
+
+func (u *productUseCase) Delete(ctx context.Context, id uuid.UUID) error {
+	if err := u.repo.Delete(ctx, id); err != nil {
+		return fmt.Errorf("usecase.product.Delete: %w", err)
+	}
+	return nil
 }
 
 func (u *productUseCase) GetByID(ctx context.Context, id uuid.UUID) (*domain.Product, error) {
