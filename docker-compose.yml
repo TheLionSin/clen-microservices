@@ -24,6 +24,7 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -33,6 +34,7 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+    restart: unless-stopped
 
 
 volumes:
