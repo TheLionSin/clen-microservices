@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"order-service/internal/config"
 	router "order-service/internal/handler/http"
+	"order-service/internal/repository/postgresrepo"
 	"order-service/internal/repository/redisrepo"
 	"order-service/internal/usecase"
 	grpcclient "order-service/pkg/client/grpc"
+	"order-service/pkg/client/postgresql"
 	"order-service/pkg/client/redis"
 	"os"
 	"os/signal"
@@ -43,12 +45,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Подключение к PostgreSQL
+	pgPool, err := postgresql.NewClient(ctx, cfg.PostgreSQL.URL)
+	if err != nil {
+		slog.Error("Failed to connect to Postgres", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer pgPool.Close()
+
 	// --- 2. Слои приложения ---
 	cartRepo := redisrepo.NewCartRepo(redisClient)
+	orderRepo := postgresrepo.NewOrderRepo(pgPool)
 	cartUseCase := usecase.NewCartUseCase(cartRepo, catalogGRPC)
+	orderUseCase := usecase.NewOrderUseCase(cartRepo, orderRepo, catalogGRPC)
 
 	// --- 3. HTTP Сервер ---
-	r := router.NewRouter(cartUseCase)
+	r := router.NewRouter(cartUseCase, orderUseCase)
 	srv := &http.Server{
 		Addr:         ":" + cfg.Listen.Port,
 		Handler:      r,

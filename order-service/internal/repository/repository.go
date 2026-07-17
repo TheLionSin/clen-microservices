@@ -12,3 +12,7 @@ type CartRepository interface {
 	Save(ctx context.Context, cart *domain.Cart) error
 	Delete(ctx context.Context, userID uuid.UUID) error
 }
+
+type OrderRepository interface {
+	CreateOrder(ctx context.Context, order *domain.Order) error
+}
