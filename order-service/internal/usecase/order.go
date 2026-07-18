@@ -18,6 +18,10 @@ var (
 	ErrEmptyCart = errors.New("cannot checkout an empty card")
 )
 
+type MessageProducer interface {
+	PublishOrderCreated(ctx context.Context, event any) error
+}
+
 type OrderUseCase interface {
 	Checkout(ctx context.Context, userID uuid.UUID) (string, error)
 }
@@ -26,13 +30,16 @@ type orderUseCase struct {
 	cartRepo      repository.CartRepository
 	orderRepo     repository.OrderRepository
 	catalogClient *grpcclient.CatalogClient
+	producer      MessageProducer
 }
 
-func NewOrderUseCase(cartRepo repository.CartRepository, orderRepo repository.OrderRepository, catalogClient *grpcclient.CatalogClient) OrderUseCase {
+func NewOrderUseCase(cartRepo repository.CartRepository, orderRepo repository.OrderRepository,
+	catalogClient *grpcclient.CatalogClient, producer MessageProducer) OrderUseCase {
 	return &orderUseCase{
 		cartRepo:      cartRepo,
 		orderRepo:     orderRepo,
 		catalogClient: catalogClient,
+		producer: producer,
 	}
 }
 
@@ -107,9 +114,30 @@ func (u *orderUseCase) Checkout(ctx context.Context, userID uuid.UUID) (string, 
 		slog.Warn("Failed to clear cart after checkout", slog.String("user_id", userID.String()), slog.String("error", err.Error()))
 	}
 
+	// Отправляем событие в Kafka
+	event := domain.OrderCreatedEvent{
+		OrderID:     order.ID,
+		UserID:      order.UserID,
+		TotalAmount: order.TotalAmount,
+		CreatedAt:   order.CreatedAt,
+	}
+
+	// Отправка в брокер сообщений не должна влиять на ответ юзеру.
+	// Даже если Kafka временно упадет, заказ в базе уже есть.
+	// Поэтому ошибку мы только логируем, но клиенту отдаем успешную ссылку.
+
+	if err := u.producer.PublishOrderCreated(ctx, event); err != nil {
+		slog.Error("Failed to publish order event to Kafka",
+			slog.String("order_id", order.ID.String()), slog.String("error", err.Error()),
+		)
+	} else {
+		slog.Info("Order event successfully published to Kafka", slog.String("order_id", order.ID.String()))
+
+	}
+
 	//6. Формируем безопасную ссылку WhatsApp.
 	//url.QueryEscape заменяет пробелы на %20 и переносы строк на %0A
 	WaLink := fmt.Sprintf("https://wa.me/77076665544?text=%s", url.QueryEscape(waText))
-	
+
 	return WaLink, nil
 }

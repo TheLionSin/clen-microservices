@@ -23,6 +23,10 @@ type Config struct {
 	Clients struct {
 		CatalogGRPC string `env:"CATALOG_GRPC_ADDR" env-default:"localhost:50051"`
 	}
+	Kafka struct {
+		Brokers []string `env:"KAFKA_BROKERS" env-default:"localhost:9092"`
+		Topic   string   `env:"KAFKA_TOPIC" env-default:"orders.created"`
+	}
 }
 
 var (

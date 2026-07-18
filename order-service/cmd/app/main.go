@@ -11,6 +11,7 @@ import (
 	"order-service/internal/repository/redisrepo"
 	"order-service/internal/usecase"
 	grpcclient "order-service/pkg/client/grpc"
+	"order-service/pkg/client/kafka"
 	"order-service/pkg/client/postgresql"
 	"order-service/pkg/client/redis"
 	"os"
@@ -53,11 +54,17 @@ func main() {
 	}
 	defer pgPool.Close()
 
+	// Подключение к Kafka
+	// В конфиге Brokers это массив, но из ENV читается строка.
+	// Для простоты MVP передаем одним куском, cleanenv сам разобьет по запятым, если их несколько.
+	kafkaProducer := kafka.NewProducer(cfg.Kafka.Brokers, cfg.Kafka.Topic)
+	defer kafkaProducer.Close()
+
 	// --- 2. Слои приложения ---
 	cartRepo := redisrepo.NewCartRepo(redisClient)
 	orderRepo := postgresrepo.NewOrderRepo(pgPool)
 	cartUseCase := usecase.NewCartUseCase(cartRepo, catalogGRPC)
-	orderUseCase := usecase.NewOrderUseCase(cartRepo, orderRepo, catalogGRPC)
+	orderUseCase := usecase.NewOrderUseCase(cartRepo, orderRepo, catalogGRPC, kafkaProducer)
 
 	// --- 3. HTTP Сервер ---
 	r := router.NewRouter(cartUseCase, orderUseCase)
