@@ -46,7 +46,7 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, 
 
 	var user domain.User
 	err := r.pool.QueryRow(ctx, query, email).Scan(
-		&user.ID, user.Email, user.PasswordHash, user.CreatedAt)
+		&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt)
 
 	if err != nil {
 		// Перехватываем отсутствие строк и возвращаем красивую доменную ошибку
@@ -55,6 +55,6 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, 
 		}
 		return nil, fmt.Errorf("postgresrepo.userRepo.GetByEmail: %w", err)
 	}
-	
+
 	return &user, nil
 }
