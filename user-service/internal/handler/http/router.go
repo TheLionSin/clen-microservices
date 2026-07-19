@@ -18,8 +18,14 @@ func NewRouter(authUseCase usecase.AuthUseCase) *chi.Mux {
 
 	authHandler := v1.NewAuthHandler(authUseCase)
 
-	r.Route("/api/v1/auth", func(r chi.Router) {
-		authHandler.RegisterRoutes(r)
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/register", authHandler.Register)
+			r.Post("/login", authHandler.Login)
+		})
+		r.Route("/users", func(r chi.Router) {
+			r.Get("/me", authHandler.GetProfile)
+		})
 	})
 
 	return r

@@ -22,6 +22,7 @@ var (
 type AuthUseCase interface {
 	Register(ctx context.Context, email, password string) (uuid.UUID, error)
 	Login(ctx context.Context, email, password string) (string, error)
+	GetProfile(ctx context.Context, userID uuid.UUID) (*domain.User, error)
 }
 
 type authUseCase struct {
@@ -90,6 +91,14 @@ func (u *authUseCase) Login(ctx context.Context, email, password string) (string
 	}
 
 	return token, nil
+}
+
+func (u *authUseCase) GetProfile(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
+	user, err := u.repo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("usecase.GetProfile: %w", err)
+	}
+	return user, nil
 }
 
 func (u *authUseCase) generateJWT(user *domain.User) (string, error) {

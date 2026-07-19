@@ -8,6 +8,7 @@ import (
 	"user-service/internal/usecase"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 type AuthHandler struct {
@@ -21,11 +22,18 @@ func NewAuthHandler(useCase usecase.AuthUseCase) *AuthHandler {
 func (h *AuthHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/register", h.Register)
 	r.Post("/login", h.Login)
+	r.Get("/me", h.GetProfile)
 }
 
 type AuthRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type UserProfileResponse struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	CreatedAt string `json:"created_at"`
 }
 
 type ErrorResponse struct {
@@ -78,6 +86,38 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"access_token": token,
 	})
+}
+
+func (h *AuthHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.Header.Get("X-User-Id")
+	if userIDStr == "" {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized: missing X-User-Id header")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid user id format")
+		return
+	}
+
+	user, err := h.useCase.GetProfile(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			writeJSONError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	resp := UserProfileResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt.Format("02.01.2006 15:04"),
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

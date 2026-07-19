@@ -58,6 +58,7 @@ func main() {
 		//Auth middleware уже подставит X-User-Id в заголовки)
 		private.Handle("/api/v1/cart*", orderProxy)
 		private.Handle("/api/v1/orders*", orderProxy)
+		private.Handle("/api/v1/users*", userProxy)
 	})
 
 	srv := &http.Server{

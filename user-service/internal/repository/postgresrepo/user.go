@@ -7,6 +7,7 @@ import (
 	"user-service/internal/domain"
 	"user-service/internal/repository"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,6 +55,25 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, 
 			return nil, domain.ErrUserNotFound
 		}
 		return nil, fmt.Errorf("postgresrepo.userRepo.GetByEmail: %w", err)
+	}
+
+	return &user, nil
+}
+
+func (r *userRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
+	query := `
+			SELECT id,email,password_hash,created_at FROM users WHERE id = $1`
+
+	var user domain.User
+
+	err := r.pool.QueryRow(ctx, query, id).Scan(
+		&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrUserNotFound
+		}
+		return nil, fmt.Errorf("postgresrepo.userRepo.GetByID: %w", err)
 	}
 
 	return &user, nil
