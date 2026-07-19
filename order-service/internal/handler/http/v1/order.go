@@ -19,6 +19,7 @@ func NewOrderHandler(u usecase.OrderUseCase) *OrderHandler {
 
 func (h *OrderHandler) Register(r chi.Router) {
 	r.Post("/checkout", h.Checkout)
+	r.Get("/", h.GetMyOrders)
 }
 
 func (h *OrderHandler) Checkout(w http.ResponseWriter, r *http.Request) {
@@ -43,4 +44,20 @@ func (h *OrderHandler) Checkout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"whatsapp_link": link,
 	})
+}
+
+func (h *OrderHandler) GetMyOrders(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserID(r)
+	if err != nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	orders, err := h.useCase.GetMyOrders(r.Context(), userID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, orders)
 }

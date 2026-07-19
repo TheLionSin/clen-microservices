@@ -24,6 +24,7 @@ type MessageProducer interface {
 
 type OrderUseCase interface {
 	Checkout(ctx context.Context, userID uuid.UUID) (string, error)
+	GetMyOrders(ctx context.Context, userID uuid.UUID) ([]domain.Order, error)
 }
 
 type orderUseCase struct {
@@ -39,7 +40,7 @@ func NewOrderUseCase(cartRepo repository.CartRepository, orderRepo repository.Or
 		cartRepo:      cartRepo,
 		orderRepo:     orderRepo,
 		catalogClient: catalogClient,
-		producer: producer,
+		producer:      producer,
 	}
 }
 
@@ -140,4 +141,12 @@ func (u *orderUseCase) Checkout(ctx context.Context, userID uuid.UUID) (string, 
 	WaLink := fmt.Sprintf("https://wa.me/77076665544?text=%s", url.QueryEscape(waText))
 
 	return WaLink, nil
+}
+
+func (u *orderUseCase) GetMyOrders(ctx context.Context, userID uuid.UUID) ([]domain.Order, error) {
+	orders, err := u.orderRepo.GetOrdersByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("usecase.GetMyOrders: %w", err)
+	}
+	return orders, nil
 }

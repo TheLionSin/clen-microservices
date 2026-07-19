@@ -15,4 +15,5 @@ type CartRepository interface {
 
 type OrderRepository interface {
 	CreateOrder(ctx context.Context, order *domain.Order) error
+	GetOrdersByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Order, error)
 }
