@@ -27,6 +27,7 @@ func NewRouter(authUseCase usecase.AuthUseCase) *chi.Mux {
 		})
 		r.Route("/users", func(r chi.Router) {
 			r.Get("/me", authHandler.GetProfile)
+			r.Put("/password", authHandler.ChangePassword)
 		})
 	})
 

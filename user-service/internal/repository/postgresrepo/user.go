@@ -78,3 +78,20 @@ func (r *userRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, err
 
 	return &user, nil
 }
+
+func (r *userRepo) UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error {
+	query := `
+			UPDATE users SET password_hash = $1 WHERE id = $2`
+
+	// Exec возвращает pgconn.CommandTag, из которого можно узнать, сколько строк было изменено
+	cmdTag, err := r.pool.Exec(ctx, query, newPasswordHash, userID)
+	if err != nil {
+		return fmt.Errorf("postgresrepo.UpdatePassword: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return domain.ErrUserNotFound
+	}
+
+	return nil
+}

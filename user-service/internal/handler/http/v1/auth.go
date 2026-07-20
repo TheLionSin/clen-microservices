@@ -44,6 +44,11 @@ type UserProfileResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
@@ -165,6 +170,44 @@ func (h *AuthHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.Header.Get("X-User-Id")
+	if userIDStr == "" {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized: missing X-User-Id header")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid user id format")
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format")
+		return
+	}
+
+	err = h.useCase.ChangePassword(r.Context(), userID, req.OldPassword, req.NewPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrInvalidCredentials):
+			writeJSONError(w, http.StatusUnauthorized, "invalid old password")
+		case errors.Is(err, usecase.ErrPasswordTooShort):
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, domain.ErrUserNotFound):
+			writeJSONError(w, http.StatusNotFound, "user not found")
+		default:
+			writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		}
+		return
+
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

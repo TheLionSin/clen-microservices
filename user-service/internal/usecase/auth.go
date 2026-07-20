@@ -27,6 +27,7 @@ type AuthUseCase interface {
 	GetProfile(ctx context.Context, userID uuid.UUID) (*domain.User, error)
 	RefreshTokens(ctx context.Context, refreshToken string) (string, string, error)
 	Logout(ctx context.Context, refreshToken string) error
+	ChangePassword(ctx context.Context, userID uuid.UUID, oldPassword, newPassword string) error
 }
 
 type authUseCase struct {
@@ -142,6 +143,36 @@ func (u *authUseCase) Logout(ctx context.Context, refreshToken string) error {
 	err := u.sessionRepo.DeleteRefreshToken(ctx, refreshToken)
 	if err != nil {
 		return fmt.Errorf("usecase.Logout: %w", err)
+	}
+	return nil
+}
+
+func (u *authUseCase) ChangePassword(ctx context.Context, userID uuid.UUID, oldPassword, newPassword string) error {
+	if len(newPassword) < 6 {
+		return ErrPasswordTooShort
+	}
+
+	user, err := u.repo.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("usecase.ChangePassword get user: %w", err)
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword))
+	if err != nil {
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return domain.ErrInvalidCredentials
+		}
+		return fmt.Errorf("usecase.ChangePassword compare old : %w", err)
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("usecase.ChangePassword hash new: %w", err)
+	}
+
+	err = u.repo.UpdatePassword(ctx, userID, string(newHash))
+	if err != nil {
+		return fmt.Errorf("usecase.ChangePassword update: %w", err)
 	}
 	return nil
 }

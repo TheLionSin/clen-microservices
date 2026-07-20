@@ -12,6 +12,7 @@ type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
+	UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error
 }
 
 // SessionRepository управляет Refresh токенами (сессиями)
