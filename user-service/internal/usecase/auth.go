@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 	"user-service/internal/domain"
 	"user-service/internal/repository"
@@ -20,6 +21,8 @@ var (
 	ErrPasswordTooShort   = errors.New("password must be at least 6 characters long")
 	ErrInvalidSession     = errors.New("invalid or expired refresh token")
 )
+
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 type AuthUseCase interface {
 	Register(ctx context.Context, email, password string) (uuid.UUID, error)
@@ -50,7 +53,7 @@ func NewAuthUseCase(repo repository.UserRepository, sessionRepo repository.Sessi
 }
 
 func (u *authUseCase) Register(ctx context.Context, email, password string) (uuid.UUID, error) {
-	if email == "" {
+	if !emailRegex.MatchString(email) {
 		return uuid.Nil, ErrInvalidEmailFormat
 	}
 	if len(password) < 6 {
@@ -79,6 +82,9 @@ func (u *authUseCase) Register(ctx context.Context, email, password string) (uui
 }
 
 func (u *authUseCase) Login(ctx context.Context, email, password string) (string, string, error) {
+	if !emailRegex.MatchString(email) {
+		return "", "", domain.ErrInvalidCredentials
+	}
 	user, err := u.repo.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserNotFound) {
