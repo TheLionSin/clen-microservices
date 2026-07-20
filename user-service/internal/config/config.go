@@ -16,9 +16,13 @@ type Config struct {
 	PostgreSQL struct {
 		URL string `env:"PG_URL_USER" env-default:"postgres://clen_user:clenshop@localhost:5433/clen_users?sslmode=disable"`
 	}
+	Redis struct {
+		URL string `env:"REDIS_URL_USER" env-default:"redis://localhost:6379/1"`
+	}
 	JWT struct {
-		Secret string        `env:"JWT_SECRET" env-default:"asd@123#"`
-		TTL    time.Duration `env:"JWT_TTL" env-default:"24h"`
+		Secret     string        `env:"JWT_SECRET" env-default:"asd@123#"`
+		AccessTTL  time.Duration `env:"JWT_ACCESS_TTL" env-default:"15m"`
+		RefreshTTL time.Duration `env:"JWT_REFRESH_TTL" env-default:"720h"`
 	}
 }
 

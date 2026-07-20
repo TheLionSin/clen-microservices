@@ -22,12 +22,20 @@ func NewAuthHandler(useCase usecase.AuthUseCase) *AuthHandler {
 func (h *AuthHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/register", h.Register)
 	r.Post("/login", h.Login)
+	r.Post("/refresh", h.Refresh)
+	r.Post("/logout", h.Logout)
 	r.Get("/me", h.GetProfile)
 }
+
+// --- DTO (Data Transfer Objects) ---
 
 type AuthRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type TokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
 }
 
 type UserProfileResponse struct {
@@ -72,20 +80,59 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.useCase.Login(r.Context(), req.Email, req.Password)
+	accessToken, refreshToken, err := h.useCase.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
 			writeJSONError(w, http.StatusUnauthorized, "invalid email or password")
 			return
 		}
-
 		writeJSONError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"access_token": token,
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
 	})
+}
+
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format or missing refresh_token")
+		return
+	}
+
+	accessToken, refreshToken, err := h.useCase.RefreshTokens(r.Context(), req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, usecase.ErrInvalidSession) {
+			writeJSONError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+	})
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var req TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format or missing refresh_token")
+		return
+	}
+
+	err := h.useCase.Logout(r.Context(), req.RefreshToken)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AuthHandler) GetProfile(w http.ResponseWriter, r *http.Request) {

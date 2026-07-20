@@ -22,6 +22,8 @@ func NewRouter(authUseCase usecase.AuthUseCase) *chi.Mux {
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/register", authHandler.Register)
 			r.Post("/login", authHandler.Login)
+			r.Post("/refresh", authHandler.Refresh)
+			r.Post("/logout", authHandler.Logout)
 		})
 		r.Route("/users", func(r chi.Router) {
 			r.Get("/me", authHandler.GetProfile)

@@ -9,12 +9,15 @@ import (
 	"syscall"
 	router "user-service/internal/handler/http"
 	"user-service/internal/repository/postgresrepo"
+	"user-service/internal/repository/redisrepo"
 	"user-service/internal/usecase"
 	"user-service/pkg/client/postgresql"
 
 	"os"
 	"time"
 	"user-service/internal/config"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -33,9 +36,21 @@ func main() {
 	}
 	defer pgPool.Close()
 
+	redisOpt, err := redis.ParseURL(cfg.Redis.URL)
+	if err != nil {
+		slog.Error("Failed to parse Redis URL", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	redisClient := redis.NewClient(redisOpt)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		slog.Error("Failed to connect to Redis", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
 	//2.Layers
 	userRepo := postgresrepo.NewUserRepo(pgPool)
-	authUseCase := usecase.NewAuthUseCase(userRepo, cfg.JWT.Secret, cfg.JWT.TTL)
+	sessionRepo := redisrepo.NewSessionRepo(redisClient)
+	authUseCase := usecase.NewAuthUseCase(userRepo, sessionRepo, cfg.JWT.Secret, cfg.JWT.AccessTTL, cfg.JWT.RefreshTTL)
 
 	//3.HTTP Server
 	r := router.NewRouter(authUseCase)
