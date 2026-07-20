@@ -2,6 +2,7 @@ package main
 
 import (
 	"catalog-service/internal/config"
+	"catalog-service/internal/event"
 	grpcv1 "catalog-service/internal/handler/grpc/v1"
 	router "catalog-service/internal/handler/http"
 	"catalog-service/internal/repository/postgres"
@@ -32,10 +33,10 @@ func main() {
 		slog.String("env", "debug"),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer initCancel()
 
-	pgPool, err := postgresql.NewClient(ctx, cfg.PostgreSQL.URL)
+	pgPool, err := postgresql.NewClient(initCtx, cfg.PostgreSQL.URL)
 	if err != nil {
 		slog.Error("Не удалось подключиться к БД", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -43,7 +44,7 @@ func main() {
 
 	defer pgPool.Close()
 
-	minioClient, err := minio.NewClient(ctx, cfg.MinIO.Endpoint,
+	minioClient, err := minio.NewClient(initCtx, cfg.MinIO.Endpoint,
 		cfg.MinIO.AccessKeyID, cfg.MinIO.SecretAccessKey, cfg.MinIO.BucketName,
 		cfg.MinIO.UseSSL)
 
@@ -97,11 +98,23 @@ func main() {
 		}
 	}()
 
+	appCtx, appCancel := context.WithCancel(context.Background())
+
+	orderConsumer := event.NewOrderConsumer(
+		cfg.Kafka.Brokers,
+		cfg.Kafka.Topic,
+		cfg.Kafka.GroupID,
+		productUseCase)
+	orderConsumer.Start(appCtx)
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	sign := <-quit
 	slog.Info("Shutting down servers gracefully", slog.String("signal", sign.String()))
+
+	appCancel()
+	orderConsumer.Close()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

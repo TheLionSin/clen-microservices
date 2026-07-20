@@ -17,6 +17,11 @@ type Config struct {
 	PostgreSQL struct {
 		URL string `env:"PG_URL" env-required:"true"`
 	}
+	Kafka struct {
+		Brokers []string `env:"KAFKA_BROKERS" env-default:"localhost:9092"`
+		Topic   string   `env:"KAFKA_TOPIC" env-default:"orders.created"`
+		GroupID string   `env:"KAFKA_GROUP_ID" env-default:"catalog-service-group"`
+	}
 
 	MinIO struct {
 		Endpoint        string `env:"MINIO_ENDPOINT" env-default:"localhost:9000"`

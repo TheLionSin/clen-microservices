@@ -116,10 +116,20 @@ func (u *orderUseCase) Checkout(ctx context.Context, userID uuid.UUID) (string, 
 	}
 
 	// Отправляем событие в Kafka
+
+	eventItems := make([]domain.OrderItemEvent, 0, len(order.Items))
+	for _, item := range order.Items {
+		eventItems = append(eventItems, domain.OrderItemEvent{
+			ProductID: item.ProductID,
+			Quantity:  item.Quantity,
+		})
+	}
+
 	event := domain.OrderCreatedEvent{
 		OrderID:     order.ID,
 		UserID:      order.UserID,
 		TotalAmount: order.TotalAmount,
+		Items:       eventItems,
 		CreatedAt:   order.CreatedAt,
 	}
 

@@ -7,4 +7,5 @@ var (
 	ErrProductNotFound  = errors.New("product not found")
 	ErrCategoryNotFound = errors.New("category not found")
 	ErrCategoryInUse    = errors.New("cannot delete category because it contains products")
+	ErrNotEnoughStock   = errors.New("not enough stock")
 )

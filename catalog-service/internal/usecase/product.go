@@ -30,12 +30,18 @@ type UpdateProductInput struct {
 	ImageURLs   []string
 }
 
+type OrderItemInput struct {
+	ProductID uuid.UUID
+	Quantity  int
+}
+
 type ProductUseCase interface {
 	Create(ctx context.Context, input CreateProductInput) (uuid.UUID, error)
 	Update(ctx context.Context, input UpdateProductInput) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Product, error)
 	List(ctx context.Context, limit, offset int) ([]domain.Product, error)
+	ProcessOrderCreated(ctx context.Context, items []OrderItemInput) error
 }
 
 type productUseCase struct {
@@ -142,4 +148,19 @@ func (u *productUseCase) List(ctx context.Context, limit, offset int) ([]domain.
 		return nil, fmt.Errorf("usecase.product.List: %w", err)
 	}
 	return products, nil
+}
+
+func (u *productUseCase) ProcessOrderCreated(ctx context.Context, items []OrderItemInput) error {
+	for _, item := range items {
+		if item.Quantity <= 0 {
+			continue
+		}
+
+		err := u.repo.DecrementStock(ctx, item.ProductID, item.Quantity)
+		if err != nil {
+			return fmt.Errorf("usecase.product.ProcessOrderCreated (product_id: %s): %w", item.ProductID, err)
+		}
+	}
+
+	return nil
 }

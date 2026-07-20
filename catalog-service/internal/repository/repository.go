@@ -13,6 +13,7 @@ type ProductRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Product, error)
 	List(ctx context.Context, limit, offset int) ([]domain.Product, error)
+	DecrementStock(ctx context.Context, id uuid.UUID, quantity int) error
 }
 
 type CategoryRepository interface {

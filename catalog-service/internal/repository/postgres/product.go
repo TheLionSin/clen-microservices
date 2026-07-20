@@ -106,3 +106,21 @@ func (r *productRepo) List(ctx context.Context, limit, offset int) ([]domain.Pro
 
 	return products, err
 }
+
+func (r *productRepo) DecrementStock(ctx context.Context, id uuid.UUID, quantity int) error {
+	// Атомарный UPDATE: вычитаем quantity только если текущий stock >= quantity
+	query := `
+			UPDATE products SET stock = stock - $1, updated_at = CURRENT_TIMESTAMP
+			WHERE id = $2 AND stock >= $1`
+
+	cmdTag, err := r.pool.Exec(ctx, query, quantity, id)
+	if err != nil {
+		return fmt.Errorf("postgres.productRepo.DecrementStock: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return domain.ErrNotEnoughStock
+	}
+
+	return nil
+}

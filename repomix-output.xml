@@ -40,6 +40,16 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+api-gateway/
+  cmd/
+    app/
+      main.go
+  internal/
+    config/
+      config.go
+    middleware/
+      auth.go
+  go.mod
 catalog-service/
   cmd/
     app/
@@ -86,6 +96,14 @@ catalog-service/
         postgresql.go
   Dockerfile
   go.mod
+notification-service/
+  cmd/
+    app/
+      main.go
+  internal/
+    config/
+      config.go
+  go.mod
 order-service/
   cmd/
     app/
@@ -95,17 +113,25 @@ order-service/
       config.go
     domain/
       cart.go
+      event.go
+      order.go
     handler/
       http/
         v1/
           cart.go
+          order.go
         router.go
     repository/
+      postgresrepo/
+        order.go
       redisrepo/
         cart.go
       repository.go
     usecase/
       cart.go
+      order.go
+  migrations/
+    20260717141857_init_orders.sql
   pkg/
     api/
       catalog/
@@ -115,17 +141,174 @@ order-service/
     client/
       grpc/
         catalog.go
+      kafka/
+        producer.go
+      postgresql/
+        postgresql.go
       redis/
         redis.go
   go.mod
 proto/
   catalog/
     catalog.proto
+user-service/
+  cmd/
+    app/
+      main.go
+  internal/
+    config/
+      config.go
+    domain/
+      user.go
+    handler/
+      http/
+        v1/
+          auth.go
+        router.go
+    repository/
+      postgresrepo/
+        user.go
+      redisrepo/
+        session.go
+      repository.go
+    usecase/
+      auth.go
+  migrations/
+    20260718170707_init_users.sql
+  pkg/
+    client/
+      postgresql/
+        postgresql.go
+  go.mod
 docker-compose.yml
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="api-gateway/internal/config/config.go">
+package config
+
+import (
+	"log"
+	"sync"
+
+	"github.com/ilyakaznacheev/cleanenv"
+)
+
+type Config struct {
+	IsDebug bool `env:"IS_DEBUG" env-default:"true"`
+	Listen  struct {
+		Port string `env:"PORT" env-default:"8080"` //Единый порт для фронтенда
+	}
+	JWT struct {
+		Secret string `env:"JWT_SECRET" env-default:"asd@123#"`
+	}
+	Services struct {
+		Catalog string `env:"CATALOG_URL" env-default:"http://localhost:8081"`
+		Order   string `env:"ORDER_URL" env-default:"http://localhost:8082"`
+		User    string `env:"USER_URL" env-default:"http://localhost:8083"`
+	}
+}
+
+var (
+	instance *Config
+	once     sync.Once
+)
+
+func GetConfig() *Config {
+	once.Do(func() {
+		instance = &Config{}
+		if err := cleanenv.ReadEnv(instance); err != nil {
+			log.Fatalf("Ошибка чтения конфигурации: %s", err)
+		}
+	})
+	return instance
+}
+</file>
+
+<file path="api-gateway/internal/middleware/auth.go">
+package middleware
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+func Auth(secretKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				writeError(w, http.StatusUnauthorized, "missing authorization header")
+				return
+			}
+
+			parts := strings.Split(authHeader, " ")
+			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+				writeError(w, http.StatusUnauthorized, "invalid authorization header format")
+				return
+			}
+			tokenString := parts[1]
+
+			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method : %v", token.Header["alg"])
+				}
+				return []byte(secretKey), nil
+			})
+
+			if err != nil || !token.Valid {
+				writeError(w, http.StatusUnauthorized, "invalid or expired token")
+				return
+			}
+
+			claims, ok := token.Claims.(jwt.MapClaims)
+			if !ok {
+				writeError(w, http.StatusUnauthorized, "invalid token claims")
+				return
+			}
+
+			userID, ok := claims["user_id"].(string)
+			if !ok || userID == "" {
+				writeError(w, http.StatusUnauthorized, "user_id not found in token")
+				return
+			}
+
+			r.Header.Del("Authorization")
+			r.Header.Set("X-User-Id", userID)
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+</file>
+
+<file path="api-gateway/go.mod">
+module api-gateway
+
+go 1.26.1
+
+require (
+	github.com/BurntSushi/toml v1.2.1 // indirect
+	github.com/go-chi/chi/v5 v5.3.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/ilyakaznacheev/cleanenv v1.5.0 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+	olympos.io/encoding/edn v0.0.0-20201019073823-d3554ca0b0a3 // indirect
+)
+</file>
 
 <file path="catalog-service/internal/handler/grpc/v1/catalog.go">
 package v1
@@ -1067,88 +1250,91 @@ EXPOSE 8081
 CMD ["./catalog_app"]
 </file>
 
-<file path="order-service/cmd/app/main.go">
+<file path="notification-service/cmd/app/main.go">
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
-	"net/http"
-	"order-service/internal/config"
-	router "order-service/internal/handler/http"
-	"order-service/internal/repository/redisrepo"
-	"order-service/internal/usecase"
-	grpcclient "order-service/pkg/client/grpc"
-	"order-service/pkg/client/redis"
+	"notification-service/internal/config"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 )
 
-func main() {
+// OrderCreatedEvent - структура, точно совпадающая с тем, что отправляет Order Service
+type OrderCreatedEvent struct {
+	OrderID     uuid.UUID `json:"order_id"`
+	UserID      uuid.UUID `json:"user_id"`
+	TotalAmount int64     `json:"total_amount"`
+	CreatedAt   time.Time `json:"created_at"`
+}
 
+func main() {
 	cfg := config.GetConfig()
 	setupLogger(cfg.IsDebug)
-	slog.Info("Starting Order Service", slog.String("port", cfg.Listen.Port))
+	slog.Info("Starting Notification Service")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	//1.Kafka Reader(слушатель)
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  cfg.Kafka.Brokers,
+		Topic:    cfg.Kafka.Topic,
+		GroupID:  cfg.Kafka.GroupID,
+		MaxBytes: 10e6,
+	})
+	defer reader.Close()
+
+	slog.Info("Connected to Kafka. Waiting for messages...", slog.String("topic", cfg.Kafka.Topic))
+
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// --- 1. Инфраструктура ---
-	// Подключаемся к Redis
-	redisClient, err := redis.NewClient(ctx, cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
-
-	if err != nil {
-		slog.Error("Failed to connect to Redis", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
-	defer redisClient.Close()
-
-	// Подключаемся к Catalog Service по gRPC
-	catalogGRPC, err := grpcclient.NewCatalogClient(cfg.Clients.CatalogGRPC)
-	if err != nil {
-		slog.Error("Failed to connect to Catalog gRPC", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
-
-	// --- 2. Слои приложения ---
-	cartRepo := redisrepo.NewCartRepo(redisClient)
-	cartUseCase := usecase.NewCartUseCase(cartRepo, catalogGRPC)
-
-	// --- 3. HTTP Сервер ---
-	r := router.NewRouter(cartUseCase)
-	srv := &http.Server{
-		Addr:         ":" + cfg.Listen.Port,
-		Handler:      r,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-	}
-
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("Server error", slog.String("error", err.Error()))
-		}
-	}()
-	slog.Info("Order Service is running", slog.String("addr", srv.Addr))
+		for {
+			//ReadMessage блокирует выполнение пока не придет новое сообщение
+			msg, err := reader.ReadMessage(ctx)
+			if err != nil {
+				// Ошибка context.Canceled возникает при нормальном выключении сервиса, это не страшно
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				slog.Error("Failed to read message from Kafka", slog.String("error", err.Error()))
+				continue
+			}
 
-	// --- 4. Graceful Shutdown ---
+			//Обрабатываем сообщение
+			var event OrderCreatedEvent
+			if err := json.Unmarshal(msg.Value, &event); err != nil {
+				slog.Error("Failed to unmarshal event", slog.String("error", err.Error()))
+				continue
+			}
+
+			//Имитируем бизнес логику (отправка SMS, Email, Push)
+			slog.Info("Новое уведомление!",
+				slog.String("order_id", event.OrderID.String()),
+				slog.String("user_id", event.UserID.String()),
+				slog.Int64("total_amount", event.TotalAmount))
+		}
+		//В проде тут будет вызов внешнего API провайдера.
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	sign := <-quit
-	slog.Info("Shutting down server gracefully...", slog.String("signal", sign.String()))
+	slog.Info("Shutting down worker...", slog.String("signal", sign.String()))
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
+	// Отменяем контекст, чтобы прервать ожидание в reader.ReadMessage
+	cancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("Server forced to shutdown", slog.String("error", err.Error()))
-
-	}
-
-	slog.Info("Server exited successfully")
+	time.Sleep(1 * time.Second)
+	slog.Info("Worker exited successfully")
 }
 
 func setupLogger(isDebug bool) {
@@ -1158,12 +1344,11 @@ func setupLogger(isDebug bool) {
 	} else {
 		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
 	}
-	logger := slog.New(logHandler)
-	slog.SetDefault(logger)
+	slog.SetDefault(slog.New(logHandler))
 }
 </file>
 
-<file path="order-service/internal/config/config.go">
+<file path="notification-service/internal/config/config.go">
 package config
 
 import (
@@ -1175,16 +1360,10 @@ import (
 
 type Config struct {
 	IsDebug bool `env:"IS_DEBUG" env-default:"true"`
-	Listen  struct {
-		Port string `env:"PORT" env-default:"8082"`
-	}
-	Redis struct {
-		Address  string `env:"REDIS_ADDR" env-default:"localhost:6379"`
-		Password string `env:"REDIS_PASSWORD" env-default:""`
-		DB       int    `env:"REDIS_DB" env-default:"0"`
-	}
-	Clients struct {
-		CatalogGRPC string `env:"CATALOG_GRPC_ADDR" env-default:"localhost:50051"`
+	Kafka   struct {
+		Brokers []string `env:"KAFKA_BROKERS" env-default:"localhost:9092"`
+		Topic   string   `env:"KAFKA_TOPIC" env-default:"orders.created"`
+		GroupID string   `env:"KAFKA_GROUP_ID" env-default:"notification-service-group"`
 	}
 }
 
@@ -1200,8 +1379,27 @@ func GetConfig() *Config {
 			log.Fatalf("Ошибка чтения конфигурации: %s", err)
 		}
 	})
+
 	return instance
 }
+</file>
+
+<file path="notification-service/go.mod">
+module notification-service
+
+go 1.26.1
+
+require (
+	github.com/BurntSushi/toml v1.2.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/ilyakaznacheev/cleanenv v1.5.0 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
+	github.com/klauspost/compress v1.15.9 // indirect
+	github.com/pierrec/lz4/v4 v4.1.15 // indirect
+	github.com/segmentio/kafka-go v0.4.51 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+	olympos.io/encoding/edn v0.0.0-20201019073823-d3554ca0b0a3 // indirect
+)
 </file>
 
 <file path="order-service/internal/domain/cart.go">
@@ -1237,34 +1435,58 @@ func (c *Cart) TotalItems() int {
 }
 </file>
 
-<file path="order-service/internal/handler/http/router.go">
-package http
+<file path="order-service/internal/domain/event.go">
+package domain
 
 import (
-	v1 "order-service/internal/handler/http/v1"
-	"order-service/internal/usecase"
+	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 )
 
-func NewRouter(cartUseCase usecase.CartUseCase) *chi.Mux {
-	r := chi.NewRouter()
+// OrderCreatedEvent - структура, которая будет сериализована в JSON и отправлена в Kafka
+type OrderCreatedEvent struct {
+	OrderID     uuid.UUID `json:"order_id"`
+	UserID      uuid.UUID `json:"user_id"`
+	TotalAmount int64     `json:"total_amount"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+</file>
 
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+<file path="order-service/internal/domain/order.go">
+package domain
 
-	cartHandler := v1.NewCartHandler(cartUseCase)
+import (
+	"time"
 
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Route("/cart", func(r chi.Router) {
-			cartHandler.Register(r)
-		})
-	})
+	"github.com/google/uuid"
+)
 
-	return r
+type OrderStatus string
+
+const (
+	StatusCreated OrderStatus = "created"
+	StatusPaid    OrderStatus = "paid"
+	StatusFailed  OrderStatus = "failed"
+)
+
+// OrderItem - конкретный товар внутри оформленного заказа
+type OrderItem struct {
+	ID        uuid.UUID
+	OrderID   uuid.UUID
+	ProductID uuid.UUID
+	Quantity  int
+	Price     int64
+}
+
+// Order - сам заказ
+type Order struct {
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	TotalAmount int64
+	Status      OrderStatus
+	Items       []OrderItem // Связь один-ко-многим (один заказ - много позиций)
+	CreatedAt   time.Time
 }
 </file>
 
@@ -1339,23 +1561,6 @@ func (r *cartRepo) Delete(ctx context.Context, userID uuid.UUID) error {
 	}
 
 	return nil
-}
-</file>
-
-<file path="order-service/internal/repository/repository.go">
-package repository
-
-import (
-	"context"
-	"order-service/internal/domain"
-
-	"github.com/google/uuid"
-)
-
-type CartRepository interface {
-	Get(ctx context.Context, userID uuid.UUID) (*domain.Cart, error)
-	Save(ctx context.Context, cart *domain.Cart) error
-	Delete(ctx context.Context, userID uuid.UUID) error
 }
 </file>
 
@@ -1471,6 +1676,30 @@ func (u *cartUseCase) ClearCart(ctx context.Context, userID uuid.UUID) error {
 	}
 	return nil
 }
+</file>
+
+<file path="order-service/migrations/20260717141857_init_orders.sql">
+-- +goose Up
+
+CREATE TABLE orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    total_amount BIGINT NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE order_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+    product_id UUID NOT NULL,
+    quantity INT NOT NULL,
+    price BIGINT NOT NULL
+);
+
+-- +goose Down
+DROP TABLE order_items;
+DROP TABLE orders;
 </file>
 
 <file path="order-service/pkg/api/catalog/v1/catalog_grpc.pb.go">
@@ -1849,6 +2078,103 @@ func (c *CatalogClient) CheckProduct(ctx context.Context, productID string) (*ca
 }
 </file>
 
+<file path="order-service/pkg/client/kafka/producer.go">
+package kafka
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/segmentio/kafka-go"
+)
+
+// Producer - обертка над писателем (Writer) Kafka
+type Producer struct {
+	writer *kafka.Writer
+}
+
+func NewProducer(brokers []string, topic string) *Producer {
+	w := &kafka.Writer{
+		Addr:     kafka.TCP(brokers...),
+		Topic:    topic,
+		Balancer: &kafka.LeastBytes{}, // Алгоритм распределения нагрузки между партициями
+		// В проде обязательно настраивают ретраи и асинхронную запись,
+		// segmentio/kafka-go делает это под капотом по умолчанию
+		AllowAutoTopicCreation: true,
+		MaxAttempts:            3,
+		ReadTimeout:            5 * time.Second,
+	}
+
+	slog.Info("Инициализирован Kafka Producer", slog.String("topic", topic))
+	return &Producer{writer: w}
+}
+
+// Close закрывает соединение (нужно для Graceful Shutdown)
+func (p *Producer) Close() error {
+	return p.writer.Close()
+}
+
+// PublishOrderCreated конвертирует событие в JSON и шлет в Kafka
+func (p *Producer) PublishOrderCreated(ctx context.Context, event any) error {
+	bytes, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("ошибка маршалинга события: %w", err)
+	}
+
+	msg := kafka.Message{
+		Key:   []byte("order_event"), // Ключ нужен для сохранения порядка сообщений
+		Value: bytes,
+	}
+
+	if err := p.writer.WriteMessages(ctx, msg); err != nil {
+		return fmt.Errorf("ошибка отправки сообщения в Kafka: %w", err)
+	}
+
+	return nil
+}
+</file>
+
+<file path="order-service/pkg/client/postgresql/postgresql.go">
+package postgresql
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func NewClient(ctx context.Context, connectionString string) (*pgxpool.Pool, error) {
+	poolConfig, err := pgxpool.ParseConfig(connectionString)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка парсинга строки подключения: %w", err)
+	}
+
+	poolConfig.MaxConns = 10
+	poolConfig.MinConns = 2
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	poolConfig.MaxConnLifetime = 1 * time.Hour
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка пинга базы данных: %w", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("ошибка пинга базы данных: %w", err)
+	}
+
+	slog.Info("Успешное подключение к PostgreSQL")
+
+	return pool, nil
+}
+</file>
+
 <file path="order-service/pkg/client/redis/redis.go">
 package redis
 
@@ -1899,6 +2225,262 @@ message CheckProductResponse {
   int64 price = 2; // Текущая цена (важно, чтобы юзер не заказал по старой цене)
   int32 stock = 3; // Остаток на складе
   string name = 4; // Название для отображения в корзине
+}
+</file>
+
+<file path="user-service/internal/domain/user.go">
+package domain
+
+import (
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+var (
+	ErrUserNotFound       = errors.New("user not found")
+	ErrUserAlreadyExists  = errors.New("user with this email already exists")
+	ErrInvalidCredentials = errors.New("invalid email or password")
+)
+
+type User struct {
+	ID           uuid.UUID
+	Email        string
+	PasswordHash string
+	CreatedAt    time.Time
+}
+</file>
+
+<file path="user-service/internal/repository/redisrepo/session.go">
+package redisrepo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+	"user-service/internal/repository"
+
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+)
+
+var ErrSessionNotFound = errors.New("session not found")
+
+type sessionRepo struct {
+	client *redis.Client
+}
+
+func NewSessionRepo(client *redis.Client) repository.SessionRepository {
+	return &sessionRepo{client: client}
+}
+
+func (r *sessionRepo) SetRefreshToken(ctx context.Context, token string, userID uuid.UUID, ttl time.Duration) error {
+	// Ключ: "refresh:<token>", Значение: userID.
+	// Используем встроенный TTL Редиса, чтобы токены удалялись сами через 30 дней.
+	key := fmt.Sprintf("refresh:%s", token)
+	err := r.client.Set(ctx, key, userID.String(), ttl).Err()
+	if err != nil {
+		return fmt.Errorf("redisrepo.SetRefreshToken: %w", err)
+	}
+	return nil
+}
+
+func (r *sessionRepo) GetUserIDByToken(ctx context.Context, token string) (uuid.UUID, error) {
+	key := fmt.Sprintf("refresh:%s", token)
+	userIDStr, err := r.client.Get(ctx, key).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			// Токен истек (удалился по TTL) или юзер уже сделал Logout
+			return uuid.Nil, ErrSessionNotFound
+		}
+		return uuid.Nil, fmt.Errorf("redisrepo.GetUserIDByToken: %w", err)
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("redisrepo.GetUserIDByToken parse uuid: %w", err)
+	}
+
+	return userID, nil
+}
+
+func (r *sessionRepo) DeleteRefreshToken(ctx context.Context, token string) error {
+	key := fmt.Sprintf("refresh:%s", token)
+	err := r.client.Del(ctx, key).Err()
+	if err != nil {
+		return fmt.Errorf("redisrepo.DeleteRefreshToken: %w", err)
+	}
+	return nil
+}
+</file>
+
+<file path="user-service/migrations/20260718170707_init_users.sql">
+-- +goose Up
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- +goose Down
+DROP TABLE users;
+</file>
+
+<file path="user-service/pkg/client/postgresql/postgresql.go">
+package postgresql
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func NewClient(ctx context.Context, connectionString string) (*pgxpool.Pool, error) {
+	poolConfig, err := pgxpool.ParseConfig(connectionString)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка парсинга строки подключения: %w", err)
+	}
+
+	poolConfig.MaxConns = 10
+	poolConfig.MinConns = 2
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	poolConfig.MaxConnLifetime = 1 * time.Hour
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка пинга базы данных: %w", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("ошибка пинга базы данных: %w", err)
+	}
+
+	slog.Info("Успешное подключение к PostgreSQL")
+
+	return pool, nil
+}
+</file>
+
+<file path="api-gateway/cmd/app/main.go">
+package main
+
+import (
+	"api-gateway/internal/config"
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	authMiddleware "api-gateway/internal/middleware"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+func main() {
+
+	cfg := config.GetConfig()
+	setupLogger(cfg.IsDebug)
+	slog.Info("Starting API Gateway", slog.String("port", cfg.Listen.Port))
+
+	r := chi.NewRouter()
+
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	//Создаем Reverse Proxy для каждого микросервиса
+	catalogProxy := createProxy(cfg.Services.Catalog)
+	orderProxy := createProxy(cfg.Services.Order)
+	userProxy := createProxy(cfg.Services.User)
+
+	// --- МАРШРУТИЗАЦИЯ ---
+
+	//1. Публичные маршруты (Аутентификация и Каталог) - сюда пускаем всех без проверки JWT
+	r.Group(func(public chi.Router) {
+		//Любой запрос на /api/v1/auth/* летит в User Service
+		public.Handle("/api/v1/auth/*", userProxy)
+
+		//Запросы на /api/v1/products, /api/v1/categories летят в Catalog Service
+		public.Handle("/api/v1/products*", catalogProxy)
+		public.Handle("/api/v1/categories*", catalogProxy)
+	})
+
+	//2. Защищенные маршруты (Корзина и Заказы) - сюда пускаем только с валидным JWT
+	r.Group(func(private chi.Router) {
+		// Включаем наш "Фейсконтроль"
+		private.Use(authMiddleware.Auth(cfg.JWT.Secret))
+
+		//Все запросы корзины и чекаута летят в Order Service
+		//Auth middleware уже подставит X-User-Id в заголовки)
+		private.Handle("/api/v1/cart*", orderProxy)
+		private.Handle("/api/v1/orders*", orderProxy)
+		private.Handle("/api/v1/users*", userProxy)
+	})
+
+	srv := &http.Server{
+		Addr:         ":" + cfg.Listen.Port,
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Gateway server error", slog.String("error", err.Error()))
+		}
+	}()
+
+	slog.Info("API Gateway is running", slog.String("addr", srv.Addr))
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sign := <-quit
+	slog.Info("Shutting down API Gateway...", slog.String("signal", sign.String()))
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Gateway forced to shutdown", slog.String("error", err.Error()))
+	}
+	slog.Info("API Gateway exited successfully")
+
+}
+
+// createProxy создает ReverseProxy, который перенаправляет запрос на указанный URL
+func createProxy(targetURL string) *httputil.ReverseProxy {
+	target, err := url.Parse(targetURL)
+	if err != nil {
+		slog.Error("Invalid target URL", slog.String("url", targetURL), slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	return httputil.NewSingleHostReverseProxy(target)
+}
+
+func setupLogger(isDebug bool) {
+	var logHandler slog.Handler
+	if isDebug {
+		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+	} else {
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	}
+	slog.SetDefault(slog.New(logHandler))
+
 }
 </file>
 
@@ -2118,29 +2700,354 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 }
 </file>
 
-<file path="order-service/go.mod">
-module order-service
+<file path="order-service/internal/handler/http/v1/order.go">
+package v1
+
+import (
+	"errors"
+	"net/http"
+	"order-service/internal/domain"
+	"order-service/internal/usecase"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type OrderHandler struct {
+	useCase usecase.OrderUseCase
+}
+
+func NewOrderHandler(u usecase.OrderUseCase) *OrderHandler {
+	return &OrderHandler{useCase: u}
+}
+
+func (h *OrderHandler) Register(r chi.Router) {
+	r.Post("/checkout", h.Checkout)
+	r.Get("/", h.GetMyOrders)
+}
+
+func (h *OrderHandler) Checkout(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserID(r)
+	if err != nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	link, err := h.useCase.Checkout(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrCartNotFound) || errors.Is(err, usecase.ErrEmptyCart) {
+			writeJSONError(w, http.StatusBadRequest, "cart is empty")
+			return
+		}
+
+		// Для MVP отдаем текст ошибки клиенту (чтобы видеть, если товара не хватило)
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"whatsapp_link": link,
+	})
+}
+
+func (h *OrderHandler) GetMyOrders(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserID(r)
+	if err != nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	orders, err := h.useCase.GetMyOrders(r.Context(), userID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, orders)
+}
+</file>
+
+<file path="order-service/internal/handler/http/router.go">
+package http
+
+import (
+	v1 "order-service/internal/handler/http/v1"
+	"order-service/internal/usecase"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+func NewRouter(cartUseCase usecase.CartUseCase, orderUseCase usecase.OrderUseCase) *chi.Mux {
+	r := chi.NewRouter()
+
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	cartHandler := v1.NewCartHandler(cartUseCase)
+	orderHandler := v1.NewOrderHandler(orderUseCase)
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/cart", func(r chi.Router) {
+			cartHandler.Register(r)
+		})
+		r.Route("/orders", func(r chi.Router) {
+			orderHandler.Register(r)
+		})
+	})
+
+	return r
+}
+</file>
+
+<file path="order-service/internal/repository/postgresrepo/order.go">
+package postgresrepo
+
+import (
+	"context"
+	"fmt"
+	"order-service/internal/domain"
+	"order-service/internal/repository"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type orderRepo struct {
+	pool *pgxpool.Pool
+}
+
+func NewOrderRepo(pool *pgxpool.Pool) repository.OrderRepository {
+	return &orderRepo{pool: pool}
+}
+
+func (r *orderRepo) CreateOrder(ctx context.Context, order *domain.Order) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("ошибка старта транзакции: %w", err)
+	}
+
+	// Обязательный паттерн: defer Rollback.
+	// Если мы не вызовем tx.Commit() из-за какой-то ошибки ниже,
+	// defer отменит все изменения. Если Commit() прошел успешно, Rollback просто ничего не сделает.
+	defer tx.Rollback(ctx)
+
+	orderQuery := `
+			INSERT INTO orders (id, user_id, total_amount, status, created_at)
+			VALUES ($1, $2, $3, $4, $5)`
+
+	_, err = tx.Exec(ctx, orderQuery, order.ID, order.UserID, order.TotalAmount, order.Status, order.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("ошибка сохранения заказа: %w", err)
+	}
+
+	itemQuery := `
+			INSERT INTO order_items (id, order_id, product_id, quantity, price)
+			VALUES ($1, $2, $3, $4, $5)`
+
+	for _, item := range order.Items {
+		_, err = tx.Exec(ctx, itemQuery, item.ID, item.OrderID, item.ProductID, item.Quantity, item.Price)
+		if err != nil {
+			return fmt.Errorf("ошибка сохранения позиции заказа: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("ошибка коммита транзакции: %w", err)
+	}
+
+	return nil
+}
+
+func (r *orderRepo) GetOrdersByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Order, error) {
+	//Достаем сами заказы (сортируем от новых к старым)
+	orderQuery := `
+		SELECT id, user_id, total_amount, status, created_at
+		FROM orders WHERE user_id = $1 ORDER BY created_at DESC`
+
+	rows, err := r.pool.Query(ctx, orderQuery, userID)
+	if err != nil {
+		return nil, fmt.Errorf("postgresrepo.GetOrders query: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []domain.Order
+	var orderIDs []uuid.UUID
+
+	for rows.Next() {
+		var o domain.Order
+		if err := rows.Scan(&o.ID, &o.UserID, &o.TotalAmount, &o.Status, &o.CreatedAt); err != nil {
+			return nil, fmt.Errorf("postgresrepo.GetOrders scan: %w", err)
+		}
+		//Инициализируем пустой срез, чтобы в JSON отдавался [], а не null
+		o.Items = []domain.OrderItem{}
+		orders = append(orders, o)
+		orderIDs = append(orderIDs, o.ID)
+	}
+
+	//Если заказов нет, просто возвращаем пустой массив
+	if len(orders) == 0 {
+		return []domain.Order{}, nil
+	}
+
+	//Создаем мапу (словарь) указателей для быстрого доступа к заказам в памяти
+	orderMap := make(map[uuid.UUID]*domain.Order)
+	for i := range orders {
+		orderMap[orders[i].ID] = &orders[i]
+	}
+
+	//Достаем все товары для ВСЕХ найденных заказов ОДНИМ запросом
+	//$1 здесь примет массив UUID, а оператор ANY сработает как IN (...)
+	itemQuery := `
+			SELECT id, order_id, product_id, quantity, price
+			FROM order_items
+			WHERE order_id = ANY($1)`
+
+	itemRows, err := r.pool.Query(ctx, itemQuery, orderIDs)
+	if err != nil {
+		return nil, fmt.Errorf("postgresrepo.GetOrders items query: %w", err)
+	}
+	defer itemRows.Close()
+
+	for itemRows.Next() {
+		var item domain.OrderItem
+		if err := itemRows.Scan(&item.ID, &item.OrderID, &item.ProductID, &item.Quantity, &item.Price); err != nil {
+			return nil, fmt.Errorf("postgresrepo.GetOrders item scan: %w", err)
+		}
+
+		//Прикрепляем товар к нужному заказу через мапу
+		if order, exists := orderMap[item.OrderID]; exists {
+			order.Items = append(order.Items, item)
+		}
+	}
+
+	return orders, nil
+}
+</file>
+
+<file path="user-service/cmd/app/main.go">
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os/signal"
+	"syscall"
+	router "user-service/internal/handler/http"
+	"user-service/internal/repository/postgresrepo"
+	"user-service/internal/repository/redisrepo"
+	"user-service/internal/usecase"
+	"user-service/pkg/client/postgresql"
+
+	"os"
+	"time"
+	"user-service/internal/config"
+
+	"github.com/redis/go-redis/v9"
+)
+
+func main() {
+	cfg := config.GetConfig()
+	setupLogger(cfg.IsDebug)
+	slog.Info("Starting User Service", slog.String("port", cfg.Listen.Port))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	//1.Infra
+	pgPool, err := postgresql.NewClient(ctx, cfg.PostgreSQL.URL)
+	if err != nil {
+		slog.Error("Failed to connect to Postgres", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer pgPool.Close()
+
+	redisOpt, err := redis.ParseURL(cfg.Redis.URL)
+	if err != nil {
+		slog.Error("Failed to parse Redis URL", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	redisClient := redis.NewClient(redisOpt)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		slog.Error("Failed to connect to Redis", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	//2.Layers
+	userRepo := postgresrepo.NewUserRepo(pgPool)
+	sessionRepo := redisrepo.NewSessionRepo(redisClient)
+	authUseCase := usecase.NewAuthUseCase(userRepo, sessionRepo, cfg.JWT.Secret, cfg.JWT.AccessTTL, cfg.JWT.RefreshTTL)
+
+	//3.HTTP Server
+	r := router.NewRouter(authUseCase)
+	srv := &http.Server{
+		Addr:         ":" + cfg.Listen.Port,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Server error", slog.String("error", err.Error()))
+		}
+	}()
+	slog.Info("User Service is running", slog.String("addr", srv.Addr))
+
+	//4.Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	sign := <-quit
+	slog.Info("Shutting down server...", slog.String("signal", sign.String()))
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Server forced to shutdown", slog.String("error", err.Error()))
+	}
+
+	slog.Info("Server exited successfully")
+}
+
+func setupLogger(isDebug bool) {
+	var logHandler slog.Handler
+	if isDebug {
+		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+	} else {
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	}
+	logger := slog.New(logHandler)
+	slog.SetDefault(logger)
+}
+</file>
+
+<file path="user-service/go.mod">
+module user-service
 
 go 1.26.1
 
 require (
-	github.com/go-chi/chi/v5 v5.3.0
-	github.com/google/uuid v1.6.0
-	github.com/ilyakaznacheev/cleanenv v1.5.0
-	github.com/redis/go-redis/v9 v9.20.1
-	google.golang.org/grpc v1.81.1
-	google.golang.org/protobuf v1.36.11
-)
-
-require (
 	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/go-chi/chi/v5 v5.3.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/ilyakaznacheev/cleanenv v1.5.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/pgx/v5 v5.10.0 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
+	github.com/redis/go-redis/v9 v9.21.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/net v0.51.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	olympos.io/encoding/edn v0.0.0-20201019073823-d3554ca0b0a3 // indirect
 )
@@ -2632,6 +3539,298 @@ require (
 )
 </file>
 
+<file path="order-service/cmd/app/main.go">
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"order-service/internal/config"
+	router "order-service/internal/handler/http"
+	"order-service/internal/repository/postgresrepo"
+	"order-service/internal/repository/redisrepo"
+	"order-service/internal/usecase"
+	grpcclient "order-service/pkg/client/grpc"
+	"order-service/pkg/client/kafka"
+	"order-service/pkg/client/postgresql"
+	"order-service/pkg/client/redis"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+func main() {
+
+	cfg := config.GetConfig()
+	setupLogger(cfg.IsDebug)
+	slog.Info("Starting Order Service", slog.String("port", cfg.Listen.Port))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// --- 1. Инфраструктура ---
+	// Подключаемся к Redis
+	redisClient, err := redis.NewClient(ctx, cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.DB)
+
+	if err != nil {
+		slog.Error("Failed to connect to Redis", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer redisClient.Close()
+
+	// Подключаемся к Catalog Service по gRPC
+	catalogGRPC, err := grpcclient.NewCatalogClient(cfg.Clients.CatalogGRPC)
+	if err != nil {
+		slog.Error("Failed to connect to Catalog gRPC", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	// Подключение к PostgreSQL
+	pgPool, err := postgresql.NewClient(ctx, cfg.PostgreSQL.URL)
+	if err != nil {
+		slog.Error("Failed to connect to Postgres", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer pgPool.Close()
+
+	// Подключение к Kafka
+	// В конфиге Brokers это массив, но из ENV читается строка.
+	// Для простоты MVP передаем одним куском, cleanenv сам разобьет по запятым, если их несколько.
+	kafkaProducer := kafka.NewProducer(cfg.Kafka.Brokers, cfg.Kafka.Topic)
+	defer kafkaProducer.Close()
+
+	// --- 2. Слои приложения ---
+	cartRepo := redisrepo.NewCartRepo(redisClient)
+	orderRepo := postgresrepo.NewOrderRepo(pgPool)
+	cartUseCase := usecase.NewCartUseCase(cartRepo, catalogGRPC)
+	orderUseCase := usecase.NewOrderUseCase(cartRepo, orderRepo, catalogGRPC, kafkaProducer)
+
+	// --- 3. HTTP Сервер ---
+	r := router.NewRouter(cartUseCase, orderUseCase)
+	srv := &http.Server{
+		Addr:         ":" + cfg.Listen.Port,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Server error", slog.String("error", err.Error()))
+		}
+	}()
+	slog.Info("Order Service is running", slog.String("addr", srv.Addr))
+
+	// --- 4. Graceful Shutdown ---
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	sign := <-quit
+	slog.Info("Shutting down server gracefully...", slog.String("signal", sign.String()))
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Server forced to shutdown", slog.String("error", err.Error()))
+
+	}
+
+	slog.Info("Server exited successfully")
+}
+
+func setupLogger(isDebug bool) {
+	var logHandler slog.Handler
+	if isDebug {
+		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+	} else {
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	}
+	logger := slog.New(logHandler)
+	slog.SetDefault(logger)
+}
+</file>
+
+<file path="order-service/internal/repository/repository.go">
+package repository
+
+import (
+	"context"
+	"order-service/internal/domain"
+
+	"github.com/google/uuid"
+)
+
+type CartRepository interface {
+	Get(ctx context.Context, userID uuid.UUID) (*domain.Cart, error)
+	Save(ctx context.Context, cart *domain.Cart) error
+	Delete(ctx context.Context, userID uuid.UUID) error
+}
+
+type OrderRepository interface {
+	CreateOrder(ctx context.Context, order *domain.Order) error
+	GetOrdersByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Order, error)
+}
+</file>
+
+<file path="order-service/internal/usecase/order.go">
+package usecase
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"order-service/internal/domain"
+	"order-service/internal/repository"
+	grpcclient "order-service/pkg/client/grpc"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+var (
+	ErrEmptyCart = errors.New("cannot checkout an empty card")
+)
+
+type MessageProducer interface {
+	PublishOrderCreated(ctx context.Context, event any) error
+}
+
+type OrderUseCase interface {
+	Checkout(ctx context.Context, userID uuid.UUID) (string, error)
+	GetMyOrders(ctx context.Context, userID uuid.UUID) ([]domain.Order, error)
+}
+
+type orderUseCase struct {
+	cartRepo      repository.CartRepository
+	orderRepo     repository.OrderRepository
+	catalogClient *grpcclient.CatalogClient
+	producer      MessageProducer
+}
+
+func NewOrderUseCase(cartRepo repository.CartRepository, orderRepo repository.OrderRepository,
+	catalogClient *grpcclient.CatalogClient, producer MessageProducer) OrderUseCase {
+	return &orderUseCase{
+		cartRepo:      cartRepo,
+		orderRepo:     orderRepo,
+		catalogClient: catalogClient,
+		producer:      producer,
+	}
+}
+
+func (u *orderUseCase) Checkout(ctx context.Context, userID uuid.UUID) (string, error) {
+	//1. Достаем корзину из Redis
+	cart, err := u.cartRepo.Get(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("usecase.Checkout get cart: %w", err)
+	}
+
+	if len(cart.Items) == 0 {
+		return "", ErrEmptyCart
+	}
+
+	//2. Инициализируем базовый заказ
+	order := &domain.Order{
+		ID:        uuid.New(),
+		UserID:    userID,
+		Status:    domain.StatusCreated,
+		Items:     make([]domain.OrderItem, 0, len(cart.Items)),
+		CreatedAt: time.Now().UTC(),
+	}
+
+	// Подготавливаем текст для WhatsApp (чтобы менеджеру было удобно читать)
+	waText := fmt.Sprintf("Здравствуйте! Хочу оформить заказ №%s\n\n", order.ID.String()[:8])
+	var totalAmount int64 = 0
+
+	//3. Проходим по каждому товару из корзины и проверяем актуальность в Каталоге
+	for _, cartItem := range cart.Items {
+		resp, err := u.catalogClient.CheckProduct(ctx, cartItem.ProductID.String())
+		if err != nil {
+			return "", fmt.Errorf("usecase.Checkout check catalog: %w", err)
+		}
+
+		// Защита от того, что товар удалили или раскупили, пока он лежал в корзине
+		if !resp.Exists {
+			return "", fmt.Errorf("товар %s больше не доступен", cartItem.ProductID)
+		}
+		if resp.Stock < int32(cartItem.Quantity) {
+			return "", fmt.Errorf("недостаточно товара '%s' на складе (осталось %d)", resp.Name, resp.Stock)
+		}
+
+		orderItem := domain.OrderItem{
+			ID:        uuid.New(),
+			OrderID:   order.ID,
+			ProductID: cartItem.ProductID,
+			Quantity:  cartItem.Quantity,
+			Price:     resp.Price, // Берем свежую цену из каталога
+		}
+		order.Items = append(order.Items, orderItem)
+
+		// Считаем сумму
+		itemTotal := resp.Price * int64(cartItem.Quantity)
+		totalAmount += itemTotal
+
+		// Добавляем строчку в сообщение
+		waText += fmt.Sprintf("- %s (x%d) = %d тг.\n", resp.Name, cartItem.Quantity, itemTotal)
+	}
+
+	order.TotalAmount = totalAmount
+	waText += fmt.Sprintf("\nИтого к оплате: %d тг.", totalAmount)
+
+	//4. Сохраняем заказ в PostgreSQL (сработает наша SQL-Транзакция)
+	if err := u.orderRepo.CreateOrder(ctx, order); err != nil {
+		return "", fmt.Errorf("usecase.Checkout create order: %w", err)
+	}
+
+	//5. Очищаем корзину в Redis, так как заказ успешно оформлен
+	if err := u.cartRepo.Delete(ctx, userID); err != nil {
+		// Ошибку удаления корзины мы просто логируем. Заказ уже создан,
+		// не стоит отменять его только из-за сбоя очистки кэша.
+		slog.Warn("Failed to clear cart after checkout", slog.String("user_id", userID.String()), slog.String("error", err.Error()))
+	}
+
+	// Отправляем событие в Kafka
+	event := domain.OrderCreatedEvent{
+		OrderID:     order.ID,
+		UserID:      order.UserID,
+		TotalAmount: order.TotalAmount,
+		CreatedAt:   order.CreatedAt,
+	}
+
+	// Отправка в брокер сообщений не должна влиять на ответ юзеру.
+	// Даже если Kafka временно упадет, заказ в базе уже есть.
+	// Поэтому ошибку мы только логируем, но клиенту отдаем успешную ссылку.
+
+	if err := u.producer.PublishOrderCreated(ctx, event); err != nil {
+		slog.Error("Failed to publish order event to Kafka",
+			slog.String("order_id", order.ID.String()), slog.String("error", err.Error()),
+		)
+	} else {
+		slog.Info("Order event successfully published to Kafka", slog.String("order_id", order.ID.String()))
+
+	}
+
+	//6. Формируем безопасную ссылку WhatsApp.
+	//url.QueryEscape заменяет пробелы на %20 и переносы строк на %0A
+	WaLink := fmt.Sprintf("https://wa.me/77076665544?text=%s", url.QueryEscape(waText))
+
+	return WaLink, nil
+}
+
+func (u *orderUseCase) GetMyOrders(ctx context.Context, userID uuid.UUID) ([]domain.Order, error) {
+	orders, err := u.orderRepo.GetOrdersByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("usecase.GetMyOrders: %w", err)
+	}
+	return orders, nil
+}
+</file>
+
 <file path="catalog-service/internal/repository/repository.go">
 package repository
 
@@ -2806,6 +4005,647 @@ func (u *productUseCase) List(ctx context.Context, limit, offset int) ([]domain.
 }
 </file>
 
+<file path="order-service/go.mod">
+module order-service
+
+go 1.26.1
+
+require (
+	github.com/go-chi/chi/v5 v5.3.0
+	github.com/google/uuid v1.6.0
+	github.com/ilyakaznacheev/cleanenv v1.5.0
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/redis/go-redis/v9 v9.20.1
+	google.golang.org/grpc v1.81.1
+	google.golang.org/protobuf v1.36.11
+)
+
+require (
+	github.com/BurntSushi/toml v1.2.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
+	github.com/klauspost/compress v1.15.9 // indirect
+	github.com/kr/text v0.2.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.15 // indirect
+	github.com/rogpeppe/go-internal v1.15.0 // indirect
+	github.com/segmentio/kafka-go v0.4.51 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+	olympos.io/encoding/edn v0.0.0-20201019073823-d3554ca0b0a3 // indirect
+)
+</file>
+
+<file path="user-service/internal/handler/http/v1/auth.go">
+package v1
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"user-service/internal/domain"
+	"user-service/internal/usecase"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+)
+
+type AuthHandler struct {
+	useCase usecase.AuthUseCase
+}
+
+func NewAuthHandler(useCase usecase.AuthUseCase) *AuthHandler {
+	return &AuthHandler{useCase: useCase}
+}
+
+func (h *AuthHandler) RegisterRoutes(r chi.Router) {
+	r.Post("/register", h.Register)
+	r.Post("/login", h.Login)
+	r.Post("/refresh", h.Refresh)
+	r.Post("/logout", h.Logout)
+	r.Get("/me", h.GetProfile)
+}
+
+// --- DTO (Data Transfer Objects) ---
+
+type AuthRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type TokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+type UserProfileResponse struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	CreatedAt string `json:"created_at"`
+}
+
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var req AuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format")
+		return
+	}
+
+	userID, err := h.useCase.Register(r.Context(), req.Email, req.Password)
+	if err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrInvalidEmailFormat), errors.Is(err, usecase.ErrPasswordTooShort):
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, domain.ErrUserAlreadyExists):
+			writeJSONError(w, http.StatusConflict, "user with this email already exists")
+		default:
+			writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"user_id": userID.String(),
+	})
+}
+
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	var req AuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format")
+		return
+	}
+
+	accessToken, refreshToken, err := h.useCase.Login(r.Context(), req.Email, req.Password)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			writeJSONError(w, http.StatusUnauthorized, "invalid email or password")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+	})
+}
+
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format or missing refresh_token")
+		return
+	}
+
+	accessToken, refreshToken, err := h.useCase.RefreshTokens(r.Context(), req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, usecase.ErrInvalidSession) {
+			writeJSONError(w, http.StatusUnauthorized, "invalid or expired refresh token")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+	})
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var req TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format or missing refresh_token")
+		return
+	}
+
+	err := h.useCase.Logout(r.Context(), req.RefreshToken)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AuthHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.Header.Get("X-User-Id")
+	if userIDStr == "" {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized: missing X-User-Id header")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid user id format")
+		return
+	}
+
+	user, err := h.useCase.GetProfile(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			writeJSONError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	resp := UserProfileResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt.Format("02.01.2006 15:04"),
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.Header.Get("X-User-Id")
+	if userIDStr == "" {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized: missing X-User-Id header")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid user id format")
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json format")
+		return
+	}
+
+	err = h.useCase.ChangePassword(r.Context(), userID, req.OldPassword, req.NewPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrInvalidCredentials):
+			writeJSONError(w, http.StatusUnauthorized, "invalid old password")
+		case errors.Is(err, usecase.ErrPasswordTooShort):
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, domain.ErrUserNotFound):
+			writeJSONError(w, http.StatusNotFound, "user not found")
+		default:
+			writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		}
+		return
+
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, ErrorResponse{Error: msg})
+}
+</file>
+
+<file path="user-service/internal/handler/http/router.go">
+package http
+
+import (
+	v1 "user-service/internal/handler/http/v1"
+	"user-service/internal/usecase"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+func NewRouter(authUseCase usecase.AuthUseCase) *chi.Mux {
+	r := chi.NewRouter()
+
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	authHandler := v1.NewAuthHandler(authUseCase)
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/register", authHandler.Register)
+			r.Post("/login", authHandler.Login)
+			r.Post("/refresh", authHandler.Refresh)
+			r.Post("/logout", authHandler.Logout)
+		})
+		r.Route("/users", func(r chi.Router) {
+			r.Get("/me", authHandler.GetProfile)
+			r.Put("/password", authHandler.ChangePassword)
+		})
+	})
+
+	return r
+}
+</file>
+
+<file path="user-service/internal/repository/postgresrepo/user.go">
+package postgresrepo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"user-service/internal/domain"
+	"user-service/internal/repository"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type userRepo struct {
+	pool *pgxpool.Pool
+}
+
+func NewUserRepo(pool *pgxpool.Pool) repository.UserRepository {
+	return &userRepo{
+		pool: pool,
+	}
+}
+
+func (r *userRepo) Create(ctx context.Context, user *domain.User) error {
+	query := `
+			INSERT INTO users (id,email,password_hash,created_at) VALUES($1,$2,$3,$4)`
+
+	_, err := r.pool.Exec(ctx, query, user.ID, user.Email, user.PasswordHash, user.CreatedAt)
+	if err != nil {
+		// Проверяем, является ли ошибка нарушением уникальности (Unique Violation)
+		// Код 23505 в PostgreSQL означает "unique_violation"
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrUserAlreadyExists
+		}
+		return fmt.Errorf("postgresrepo.userRepo.Create: %w", err)
+	}
+
+	return nil
+}
+
+func (r *userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
+	query := `
+			SELECT id,email,password_hash,created_at FROM users WHERE email = $1`
+
+	var user domain.User
+	err := r.pool.QueryRow(ctx, query, email).Scan(
+		&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt)
+
+	if err != nil {
+		// Перехватываем отсутствие строк и возвращаем красивую доменную ошибку
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrUserNotFound
+		}
+		return nil, fmt.Errorf("postgresrepo.userRepo.GetByEmail: %w", err)
+	}
+
+	return &user, nil
+}
+
+func (r *userRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
+	query := `
+			SELECT id,email,password_hash,created_at FROM users WHERE id = $1`
+
+	var user domain.User
+
+	err := r.pool.QueryRow(ctx, query, id).Scan(
+		&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrUserNotFound
+		}
+		return nil, fmt.Errorf("postgresrepo.userRepo.GetByID: %w", err)
+	}
+
+	return &user, nil
+}
+
+func (r *userRepo) UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error {
+	query := `
+			UPDATE users SET password_hash = $1 WHERE id = $2`
+
+	// Exec возвращает pgconn.CommandTag, из которого можно узнать, сколько строк было изменено
+	cmdTag, err := r.pool.Exec(ctx, query, newPasswordHash, userID)
+	if err != nil {
+		return fmt.Errorf("postgresrepo.UpdatePassword: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return domain.ErrUserNotFound
+	}
+
+	return nil
+}
+</file>
+
+<file path="user-service/internal/repository/repository.go">
+package repository
+
+import (
+	"context"
+	"time"
+	"user-service/internal/domain"
+
+	"github.com/google/uuid"
+)
+
+type UserRepository interface {
+	Create(ctx context.Context, user *domain.User) error
+	GetByEmail(ctx context.Context, email string) (*domain.User, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
+	UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error
+}
+
+// SessionRepository управляет Refresh токенами (сессиями)
+type SessionRepository interface {
+	SetRefreshToken(ctx context.Context, token string, userID uuid.UUID, ttl time.Duration) error
+	GetUserIDByToken(ctx context.Context, token string) (uuid.UUID, error)
+	DeleteRefreshToken(ctx context.Context, token string) error
+}
+</file>
+
+<file path="user-service/internal/usecase/auth.go">
+package usecase
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"time"
+	"user-service/internal/domain"
+	"user-service/internal/repository"
+	"user-service/internal/repository/redisrepo"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// Пользовательские ошибки слоя бизнес-логики
+var (
+	ErrInvalidEmailFormat = errors.New("invalid email format")
+	ErrPasswordTooShort   = errors.New("password must be at least 6 characters long")
+	ErrInvalidSession     = errors.New("invalid or expired refresh token")
+)
+
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+
+type AuthUseCase interface {
+	Register(ctx context.Context, email, password string) (uuid.UUID, error)
+	Login(ctx context.Context, email, password string) (string, string, error)
+	GetProfile(ctx context.Context, userID uuid.UUID) (*domain.User, error)
+	RefreshTokens(ctx context.Context, refreshToken string) (string, string, error)
+	Logout(ctx context.Context, refreshToken string) error
+	ChangePassword(ctx context.Context, userID uuid.UUID, oldPassword, newPassword string) error
+}
+
+type authUseCase struct {
+	repo        repository.UserRepository
+	sessionRepo repository.SessionRepository
+	jwtSecret   string
+	accessTTL   time.Duration
+	refreshTTL  time.Duration
+}
+
+func NewAuthUseCase(repo repository.UserRepository, sessionRepo repository.SessionRepository,
+	secret string, accessTTL time.Duration, refreshTTL time.Duration) AuthUseCase {
+	return &authUseCase{
+		repo:        repo,
+		sessionRepo: sessionRepo,
+		jwtSecret:   secret,
+		accessTTL:   accessTTL,
+		refreshTTL:  refreshTTL,
+	}
+}
+
+func (u *authUseCase) Register(ctx context.Context, email, password string) (uuid.UUID, error) {
+	if !emailRegex.MatchString(email) {
+		return uuid.Nil, ErrInvalidEmailFormat
+	}
+	if len(password) < 6 {
+		return uuid.Nil, ErrPasswordTooShort
+	}
+
+	// bcrypt.DefaultCost = 10. Это оптимальный баланс между скоростью и безопасностью.
+	// Чем выше cost, тем дольше генерируется хэш, что усложняет брутфорс (подбор паролей хакерами).
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("usecase.Register hash password: %w", err)
+	}
+
+	user := &domain.User{
+		ID:           uuid.New(),
+		Email:        email,
+		PasswordHash: string(hash),
+		CreatedAt:    time.Now().UTC(),
+	}
+
+	if err := u.repo.Create(ctx, user); err != nil {
+		return uuid.Nil, fmt.Errorf("usecase.Register create user: %w", err)
+	}
+
+	return user.ID, nil
+}
+
+func (u *authUseCase) Login(ctx context.Context, email, password string) (string, string, error) {
+	if !emailRegex.MatchString(email) {
+		return "", "", domain.ErrInvalidCredentials
+	}
+	user, err := u.repo.GetByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			// Важное правило безопасности: не говорим "Пользователь не найден" или "Неверный пароль".
+			// Отдаем общую ошибку, чтобы хакеры не могли собирать базу существующих email-ов перебором.
+			return "", "", domain.ErrInvalidCredentials
+		}
+		return "", "", fmt.Errorf("usecase.Login get user: %w", err)
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
+	if err != nil {
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return "", "", domain.ErrInvalidCredentials
+		}
+		return "", "", fmt.Errorf("usecase.Login compare password: %w", err)
+	}
+
+	// Генерируем ПАРУ токенов
+	accessToken, refreshToken, err := u.generateTokens(ctx, user.ID)
+	if err != nil {
+		return "", "", fmt.Errorf("usecase.Login generate tokens: %w", err)
+	}
+
+	return accessToken, refreshToken, nil
+
+}
+
+func (u *authUseCase) GetProfile(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
+	user, err := u.repo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("usecase.GetProfile: %w", err)
+	}
+	return user, nil
+}
+
+func (u *authUseCase) RefreshTokens(ctx context.Context, refreshToken string) (string, string, error) {
+	//1. Ищем Refresh Token в Redis. Если его там нет (логаут или истек TTL) - ошибка.
+	userID, err := u.sessionRepo.GetUserIDByToken(ctx, refreshToken)
+	if err != nil {
+		if errors.Is(err, redisrepo.ErrSessionNotFound) {
+			return "", "", ErrInvalidSession
+		}
+		return "", "", fmt.Errorf("usecase.RefreshTokens get session: %w", err)
+	}
+
+	// 2. Для максимальной безопасности (Rotated Refresh Tokens),
+	// удаляем старый рефреш токен и выдаем полностью новую пару.
+	// Это защищает от кражи рефреш-токена.
+	_ = u.sessionRepo.DeleteRefreshToken(ctx, refreshToken)
+
+	// 3. Генерируем новые токены
+	newAccess, newRefresh, err := u.generateTokens(ctx, userID)
+	if err != nil {
+		return "", "", fmt.Errorf("usecase.RefreshTokens generate: %w", err)
+	}
+
+	return newAccess, newRefresh, nil
+}
+
+func (u *authUseCase) Logout(ctx context.Context, refreshToken string) error {
+	err := u.sessionRepo.DeleteRefreshToken(ctx, refreshToken)
+	if err != nil {
+		return fmt.Errorf("usecase.Logout: %w", err)
+	}
+	return nil
+}
+
+func (u *authUseCase) ChangePassword(ctx context.Context, userID uuid.UUID, oldPassword, newPassword string) error {
+	if len(newPassword) < 6 {
+		return ErrPasswordTooShort
+	}
+
+	user, err := u.repo.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("usecase.ChangePassword get user: %w", err)
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword))
+	if err != nil {
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return domain.ErrInvalidCredentials
+		}
+		return fmt.Errorf("usecase.ChangePassword compare old : %w", err)
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("usecase.ChangePassword hash new: %w", err)
+	}
+
+	err = u.repo.UpdatePassword(ctx, userID, string(newHash))
+	if err != nil {
+		return fmt.Errorf("usecase.ChangePassword update: %w", err)
+	}
+	return nil
+}
+
+func (u *authUseCase) generateTokens(ctx context.Context, userID uuid.UUID) (string, string, error) {
+	//Создаем Payload (нагрузку) токена. В библиотеке jwt/v5 это называется Claims.
+	//MapClaims позволяет положить любые JSON-поля.
+	claims := jwt.MapClaims{
+		"user_id": userID.String(),
+		"exp":     time.Now().Add(u.accessTTL).Unix(), //Время протухания
+		"iat":     time.Now().Unix(),                  //Время выдачи
+	}
+
+	//Создаем структуру токена с алгоритмом подписи HS256
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	//Подписываем access токен нашим секретным ключом (превращаем в итоговую строку)
+	accessToken, err := token.SignedString([]byte(u.jwtSecret))
+	if err != nil {
+		return "", "", err
+	}
+
+	refreshToken := uuid.New().String()
+
+	err = u.sessionRepo.SetRefreshToken(ctx, refreshToken, userID, u.refreshTTL)
+	if err != nil {
+		return "", "", err
+	}
+
+	return accessToken, refreshToken, nil
+
+}
+</file>
+
 <file path="docker-compose.yml">
 services:
   postgres:
@@ -2846,10 +4686,43 @@ services:
     restart: unless-stopped
 
 
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: clen_kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT_HOST://:9092,PLAINTEXT_INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_HOST://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    restart: unless-stopped
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
+    depends_on:
+      - kafka
+
+
+
 volumes:
   pgdata:
   minio_data:
   redis_data:
+  kafka_data:
 </file>
 
 </files>
