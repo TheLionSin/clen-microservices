@@ -25,9 +25,9 @@ func NewUserRepo(pool *pgxpool.Pool) repository.UserRepository {
 
 func (r *userRepo) Create(ctx context.Context, user *domain.User) error {
 	query := `
-			INSERT INTO users (id,email,password_hash,created_at) VALUES($1,$2,$3,$4)`
+			INSERT INTO users (id,email,password_hash,role,created_at) VALUES($1,$2,$3,$4,$5)`
 
-	_, err := r.pool.Exec(ctx, query, user.ID, user.Email, user.PasswordHash, user.CreatedAt)
+	_, err := r.pool.Exec(ctx, query, user.ID, user.Email, user.PasswordHash, user.Role, user.CreatedAt)
 	if err != nil {
 		// Проверяем, является ли ошибка нарушением уникальности (Unique Violation)
 		// Код 23505 в PostgreSQL означает "unique_violation"
@@ -43,11 +43,11 @@ func (r *userRepo) Create(ctx context.Context, user *domain.User) error {
 
 func (r *userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	query := `
-			SELECT id,email,password_hash,created_at FROM users WHERE email = $1`
+			SELECT id,email,password_hash,role,created_at FROM users WHERE email = $1`
 
 	var user domain.User
 	err := r.pool.QueryRow(ctx, query, email).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt)
+		&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.CreatedAt)
 
 	if err != nil {
 		// Перехватываем отсутствие строк и возвращаем красивую доменную ошибку
@@ -62,12 +62,12 @@ func (r *userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, 
 
 func (r *userRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	query := `
-			SELECT id,email,password_hash,created_at FROM users WHERE id = $1`
+			SELECT id,email,password_hash,role,created_at FROM users WHERE id = $1`
 
 	var user domain.User
 
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt)
+		&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.CreatedAt)
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

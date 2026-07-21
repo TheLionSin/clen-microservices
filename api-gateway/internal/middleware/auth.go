@@ -49,12 +49,30 @@ func Auth(secretKey string) func(http.Handler) http.Handler {
 				return
 			}
 
+			role, ok := claims["role"].(string)
+			if !ok || role == "" {
+				role = "user"
+			}
+
 			r.Header.Del("Authorization")
 			r.Header.Set("X-User-Id", userID)
+			r.Header.Set("X-User-Role", role)
 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		role := r.Header.Get("X-User-Role")
+
+		if role != "admin" {
+			writeError(w, http.StatusForbidden, "access denied: admin role required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

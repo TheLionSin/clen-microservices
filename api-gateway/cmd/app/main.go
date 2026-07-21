@@ -44,21 +44,39 @@ func main() {
 		//Любой запрос на /api/v1/auth/* летит в User Service
 		public.Handle("/api/v1/auth/*", userProxy)
 
-		//Запросы на /api/v1/products, /api/v1/categories летят в Catalog Service
-		public.Handle("/api/v1/products*", catalogProxy)
-		public.Handle("/api/v1/categories*", catalogProxy)
+		// Для каталога разрешаем ТОЛЬКО метод GET для всех
+		public.Method(http.MethodGet, "/api/v1/products*", catalogProxy)
+		public.Method(http.MethodGet, "/api/v1/category*", catalogProxy)
 	})
 
-	//2. Защищенные маршруты (Корзина и Заказы) - сюда пускаем только с валидным JWT
+	//2. Защищенные маршруты (Корзина, заказы, профиль) - сюда пускаем только с валидным JWT
 	r.Group(func(private chi.Router) {
-		// Включаем наш "Фейсконтроль"
+		// Включаем Фейсконтроль
 		private.Use(authMiddleware.Auth(cfg.JWT.Secret))
 
-		//Все запросы корзины и чекаута летят в Order Service
 		//Auth middleware уже подставит X-User-Id в заголовки)
 		private.Handle("/api/v1/cart*", orderProxy)
 		private.Handle("/api/v1/orders*", orderProxy)
 		private.Handle("/api/v1/users*", userProxy)
+	})
+
+	//3. Админские маршруты - нужен JWT и роль admin
+	r.Group(func(admin chi.Router) {
+		admin.Use(authMiddleware.Auth(cfg.JWT.Secret))
+		admin.Use(authMiddleware.RequireAdmin)
+
+		// Каталог: разрешаем POST, PUT, DELETE только админам
+		admin.Method(http.MethodPost, "/api/v1/products*", catalogProxy)
+		admin.Method(http.MethodPut, "/api/v1/products*", catalogProxy)
+		admin.Method(http.MethodDelete, "/api/v1/products*", catalogProxy)
+
+		// Категории
+		admin.Method(http.MethodPost, "/api/v1/category*", catalogProxy)
+		admin.Method(http.MethodPut, "/api/v1/category*", catalogProxy)
+		admin.Method(http.MethodDelete, "/api/v1/category*", catalogProxy)
+
+		// Загрузка картинок
+		admin.Handle("/api/v1/images*", catalogProxy)
 	})
 
 	srv := &http.Server{

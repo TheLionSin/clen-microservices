@@ -71,6 +71,7 @@ func (u *authUseCase) Register(ctx context.Context, email, password string) (uui
 		ID:           uuid.New(),
 		Email:        email,
 		PasswordHash: string(hash),
+		Role:         "user",
 		CreatedAt:    time.Now().UTC(),
 	}
 
@@ -104,7 +105,7 @@ func (u *authUseCase) Login(ctx context.Context, email, password string) (string
 	}
 
 	// Генерируем ПАРУ токенов
-	accessToken, refreshToken, err := u.generateTokens(ctx, user.ID)
+	accessToken, refreshToken, err := u.generateTokens(ctx, user.ID, user.Role)
 	if err != nil {
 		return "", "", fmt.Errorf("usecase.Login generate tokens: %w", err)
 	}
@@ -136,8 +137,13 @@ func (u *authUseCase) RefreshTokens(ctx context.Context, refreshToken string) (s
 	// Это защищает от кражи рефреш-токена.
 	_ = u.sessionRepo.DeleteRefreshToken(ctx, refreshToken)
 
+	user, err := u.repo.GetByID(ctx, userID)
+	if err != nil {
+		return "", "", fmt.Errorf("usecase.RefreshTokens get user: %w", err)
+	}
+
 	// 3. Генерируем новые токены
-	newAccess, newRefresh, err := u.generateTokens(ctx, userID)
+	newAccess, newRefresh, err := u.generateTokens(ctx, userID, user.Role)
 	if err != nil {
 		return "", "", fmt.Errorf("usecase.RefreshTokens generate: %w", err)
 	}
@@ -183,11 +189,12 @@ func (u *authUseCase) ChangePassword(ctx context.Context, userID uuid.UUID, oldP
 	return nil
 }
 
-func (u *authUseCase) generateTokens(ctx context.Context, userID uuid.UUID) (string, string, error) {
+func (u *authUseCase) generateTokens(ctx context.Context, userID uuid.UUID, role string) (string, string, error) {
 	//Создаем Payload (нагрузку) токена. В библиотеке jwt/v5 это называется Claims.
 	//MapClaims позволяет положить любые JSON-поля.
 	claims := jwt.MapClaims{
 		"user_id": userID.String(),
+		"role":    role,
 		"exp":     time.Now().Add(u.accessTTL).Unix(), //Время протухания
 		"iat":     time.Now().Unix(),                  //Время выдачи
 	}
