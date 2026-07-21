@@ -13,15 +13,15 @@ type Config struct {
 		Port string `env:"PORT" env-default:"8082"`
 	}
 	Redis struct {
-		Address  string `env:"REDIS_ADDR" env-default:"localhost:6379"`
+		Address  string `env:"REDIS_URL" env-default:"localhost:6379"`
 		Password string `env:"REDIS_PASSWORD" env-default:""`
 		DB       int    `env:"REDIS_DB" env-default:"0"`
 	}
 	PostgreSQL struct {
-		URL string `env:"PG_URL_ORDER" env-default:"postgres://clen_user:clenshop@localhost:5433/clen_orders?sslmode=disable"`
+		URL string `env:"PG_URL" env-default:"postgres://clen_user:clenshop@localhost:5433/clen_orders?sslmode=disable"`
 	}
 	Clients struct {
-		CatalogGRPC string `env:"CATALOG_GRPC_ADDR" env-default:"localhost:50051"`
+		CatalogGRPC string `env:"CATALOG_GRPC_URL" env-default:"localhost:50051"`
 	}
 	Kafka struct {
 		Brokers []string `env:"KAFKA_BROKERS" env-default:"localhost:9092"`

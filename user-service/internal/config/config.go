@@ -14,10 +14,10 @@ type Config struct {
 		Port string `env:"PORT" env-default:"8083"` // User Service висит на 8083
 	}
 	PostgreSQL struct {
-		URL string `env:"PG_URL_USER" env-default:"postgres://clen_user:clenshop@localhost:5433/clen_users?sslmode=disable"`
+		URL string `env:"PG_URL" env-default:"postgres://clen_user:clenshop@localhost:5433/clen_users?sslmode=disable"`
 	}
 	Redis struct {
-		URL string `env:"REDIS_URL_USER" env-default:"redis://localhost:6379/1"`
+		URL string `env:"REDIS_URL" env-default:"redis://localhost:6379/1"`
 	}
 	JWT struct {
 		Secret     string        `env:"JWT_SECRET" env-default:"asd@123#"`

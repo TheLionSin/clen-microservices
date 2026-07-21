@@ -68,10 +68,73 @@ services:
       - kafka
 
 
+  api-gateway:
+    build: ./api-gateway
+    container_name: clen_api_gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - CATALOG_URL=http://catalog-service:8081
+      - ORDER_URL=http://order-service:8082
+      - USER_URL=http://user-service:8083
+    depends_on:
+      - catalog-service
+      - order-service
+      - user-service
+    restart: unless-stopped
+
+  catalog-service:
+    build: ./catalog-service
+    container_name: clen_catalog_service
+    environment:
+      - PG_URL=postgres://clen_user:clenshop@postgres:5432/clen_catalog?sslmode=disable
+      - KAFKA_BROKERS=kafka:29092
+      - MINIO_ENDPOINT=minio:9000
+    depends_on:
+      - postgres
+      - kafka
+      - minio
+    restart: unless-stopped
+
+  user-service:
+    build: ./user-service
+    container_name: clen_user_service
+    environment:
+      - PG_URL=postgres://clen_user:clenshop@postgres:5432/clen_users?sslmode=disable
+      - REDIS_URL=redis://redis:6379/1
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  order-service:
+    build: ./order-service
+    container_name: clen_order_service
+    environment:
+      - PG_URL=postgres://clen_user:clenshop@postgres:5432/clen_orders?sslmode=disable
+      - REDIS_URL=redis:6379
+      - KAFKA_BROKERS=kafka:29092
+      - CATALOG_GRPC_URL=catalog-service:50051
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+      - catalog-service
+    restart: unless-stopped
+
+  notification-service:
+    build: ./notification-service
+    container_name: clen_notification_service
+    environment:
+      - KAFKA_BROKERS=kafka:29092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+
 
 volumes:
   pgdata:
   minio_data:
   redis_data:
   kafka_data:
-

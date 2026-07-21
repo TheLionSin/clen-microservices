@@ -15,7 +15,7 @@ type Config struct {
 		GRPCPort string `env:"GRPC_PORT" env-default:"50051"`
 	}
 	PostgreSQL struct {
-		URL string `env:"PG_URL" env-required:"true"`
+		URL string `env:"PG_URL" env-default:"postgres://clen_user:clenshop@localhost:5433/clen_catalog?sslmode=disable"`
 	}
 	Kafka struct {
 		Brokers []string `env:"KAFKA_BROKERS" env-default:"localhost:9092"`

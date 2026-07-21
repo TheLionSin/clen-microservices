@@ -23,7 +23,6 @@ import (
 )
 
 func main() {
-	os.Setenv("PG_URL", "postgres://clen_user:clenshop@localhost:5433/clen_catalog?sslmode=disable")
 
 	cfg := config.GetConfig()
 	setupLogger(cfg.IsDebug)
