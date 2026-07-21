@@ -18,7 +18,7 @@ type Config struct {
 		DB       int    `env:"REDIS_DB" env-default:"0"`
 	}
 	PostgreSQL struct {
-		URL string `env:"PG_URL" env-default:"postgres://clen_user:clenshop@localhost:5433/clen_orders?sslmode=disable"`
+		URL string `env:"PG_URL" env-default:"postgres://clen_user:secret@localhost:5433/clen_orders?sslmode=disable"`
 	}
 	Clients struct {
 		CatalogGRPC string `env:"CATALOG_GRPC_URL" env-default:"localhost:50051"`

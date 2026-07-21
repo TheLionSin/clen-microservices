@@ -13,7 +13,7 @@ type Config struct {
 		Port string `env:"PORT" env-default:"8080"` //Единый порт для фронтенда
 	}
 	JWT struct {
-		Secret string `env:"JWT_SECRET" env-default:"asd@123#"`
+		Secret string `env:"JWT_SECRET" env-default:"secret"`
 	}
 	Services struct {
 		Catalog string `env:"CATALOG_URL" env-default:"http://localhost:8081"`
