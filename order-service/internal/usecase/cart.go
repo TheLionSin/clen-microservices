@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"order-service/internal/domain"
 	"order-service/internal/repository"
-	grpcclient "order-service/pkg/client/grpc"
+	catalogv1 "order-service/pkg/api/catalog/v1"
 
 	"github.com/google/uuid"
 )
@@ -29,12 +29,16 @@ type CartUseCase interface {
 	ClearCart(ctx context.Context, userID uuid.UUID) error
 }
 
-type cartUseCase struct {
-	repo          repository.CartRepository
-	catalogClient *grpcclient.CatalogClient
+type CatalogProvider interface {
+	CheckProduct(ctx context.Context, productID string) (*catalogv1.CheckProductResponse, error)
 }
 
-func NewCartUseCase(repo repository.CartRepository, catalogClient *grpcclient.CatalogClient) CartUseCase {
+type cartUseCase struct {
+	repo          repository.CartRepository
+	catalogClient CatalogProvider
+}
+
+func NewCartUseCase(repo repository.CartRepository, catalogClient CatalogProvider) CartUseCase {
 	return &cartUseCase{
 		repo:          repo,
 		catalogClient: catalogClient,
