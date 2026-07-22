@@ -130,6 +130,132 @@ func TestAddToCart_InvalidQuantity(t *testing.T) {
 	assert.Nil(t, cart)
 }
 
+func TestAddToCart_ExistingItem_IncreasesQuantity(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mocks.NewMockCartRepository(ctrl)
+	mockCatalog := usecasemocks.NewMockCatalogProvider(ctrl)
+	useCase := usecase.NewCartUseCase(mockRepo, mockCatalog)
+
+	ctx := context.Background()
+	userID := uuid.New()
+	productID := uuid.New()
+
+	existingCart := &domain.Cart{
+		UserID: userID,
+		Items: []domain.CartItem{
+			{ProductID: productID, Quantity: 2},
+		},
+	}
+
+	mockCatalog.EXPECT().CheckProduct(ctx, productID.String()).
+		Return(&catalogv1.CheckProductResponse{
+			Exists: true,
+			Stock:  10,
+		}, nil)
+
+	mockRepo.EXPECT().Get(ctx, userID).Return(existingCart, nil)
+
+	mockRepo.EXPECT().Save(ctx, gomock.Any()).Return(nil)
+
+	input := usecase.AddToCartInput{
+		UserID:    userID,
+		ProductID: productID,
+		Quantity:  3,
+	}
+	cart, err := useCase.AddToCart(ctx, input)
+	assert.NoError(t, err)
+	assert.NotNil(t, cart)
+	assert.Equal(t, 5, cart.Items[0].Quantity)
+}
+
+func TestAddToCart_ProductNotFoundInCatalog(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mocks.NewMockCartRepository(ctrl)
+	mockCatalog := usecasemocks.NewMockCatalogProvider(ctrl)
+	useCase := usecase.NewCartUseCase(mockRepo, mockCatalog)
+
+	ctx := context.Background()
+	productID := uuid.New()
+
+	mockCatalog.EXPECT().CheckProduct(ctx, productID.String()).
+		Return(&catalogv1.CheckProductResponse{Exists: false}, nil)
+
+	input := usecase.AddToCartInput{
+		UserID:    uuid.New(),
+		ProductID: productID,
+		Quantity:  1,
+	}
+	cart, err := useCase.AddToCart(ctx, input)
+
+	assert.ErrorIs(t, err, usecase.ErrProductNotFound)
+	assert.Nil(t, cart)
+}
+
+func TestAddToCart_CatalogError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mocks.NewMockCartRepository(ctrl)
+	mockCatalog := usecasemocks.NewMockCatalogProvider(ctrl)
+	useCase := usecase.NewCartUseCase(mockRepo, mockCatalog)
+
+	ctx := context.Background()
+	productID := uuid.New()
+
+	grpcErr := errors.New("grpc connection timeout")
+
+	mockCatalog.EXPECT().CheckProduct(ctx, productID.String()).
+		Return(nil, grpcErr)
+
+	input := usecase.AddToCartInput{
+		UserID:    uuid.New(),
+		ProductID: productID,
+		Quantity:  1,
+	}
+	cart, err := useCase.AddToCart(ctx, input)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, grpcErr)
+	assert.Nil(t, cart)
+}
+
+func TestAddToCart_SaveError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mocks.NewMockCartRepository(ctrl)
+	mockCatalog := usecasemocks.NewMockCatalogProvider(ctrl)
+	useCase := usecase.NewCartUseCase(mockRepo, mockCatalog)
+
+	ctx := context.Background()
+	userID := uuid.New()
+	productID := uuid.New()
+
+	mockCatalog.EXPECT().CheckProduct(ctx, productID.String()).
+		Return(&catalogv1.CheckProductResponse{Exists: true, Stock: 10}, nil)
+
+	mockRepo.EXPECT().Get(ctx, userID).
+		Return(nil, domain.ErrCartNotFound)
+
+	saveErr := errors.New("redis dick full")
+	mockRepo.EXPECT().Save(ctx, gomock.Any()).Return(saveErr)
+
+	input := usecase.AddToCartInput{
+		UserID:    userID,
+		ProductID: productID,
+		Quantity:  1,
+	}
+	cart, err := useCase.AddToCart(ctx, input)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, saveErr)
+	assert.Nil(t, cart)
+}
+
 func TestGetCart_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -195,4 +321,25 @@ func TestClearCart_Success(t *testing.T) {
 	err := useCase.ClearCart(ctx, userID)
 
 	assert.NoError(t, err)
+}
+
+func TestClearCart_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mocks.NewMockCartRepository(ctrl)
+	mockCatalog := usecasemocks.NewMockCatalogProvider(ctrl)
+	useCase := usecase.NewCartUseCase(mockRepo, mockCatalog)
+
+	ctx := context.Background()
+	userID := uuid.New()
+
+	dbErr := errors.New("redis error")
+
+	mockRepo.EXPECT().Delete(ctx, userID).Return(dbErr)
+
+	err := useCase.ClearCart(ctx, userID)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, dbErr)
 }

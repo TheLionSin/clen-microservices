@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"order-service/internal/domain"
 	"order-service/internal/repository"
-	grpcclient "order-service/pkg/client/grpc"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,12 +29,12 @@ type OrderUseCase interface {
 type orderUseCase struct {
 	cartRepo      repository.CartRepository
 	orderRepo     repository.OrderRepository
-	catalogClient *grpcclient.CatalogClient
+	catalogClient CatalogProvider
 	producer      MessageProducer
 }
 
 func NewOrderUseCase(cartRepo repository.CartRepository, orderRepo repository.OrderRepository,
-	catalogClient *grpcclient.CatalogClient, producer MessageProducer) OrderUseCase {
+	catalogClient CatalogProvider, producer MessageProducer) OrderUseCase {
 	return &orderUseCase{
 		cartRepo:      cartRepo,
 		orderRepo:     orderRepo,
